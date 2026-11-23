@@ -3,7 +3,7 @@
 Read this file first in every new session. Update it at the end of every step.
 
 - **Spec:** [docs/SRS.md](SRS.md) (SRS v2) is the source of truth. The live doc at https://claude.ai/artifact/XDy24h8RPCbb2onVi1qmW3 has the same content, minus the small additions made during the build.
-- **Current phase:** Phases 1 to 5 and Phase 6a (the rest of the API) are done. The Docker check is still pending, because Docker Desktop wasn't running. Real Redis is now checked through a local Memurai. Next up is Phase 6b (React frontend).
+- **Current phase:** Phases 1 to 6 are done. Two checks are still pending: the Docker stack (Docker Desktop wasn't running) and a click-through in a real browser. Next up is Phase 7 (load test, Redis restart test, deploy, README).
 - **Last updated:** 2026-11-23
 
 ## Workflow rules
@@ -23,13 +23,17 @@ Read this file first in every new session. Update it at the end of every step.
 # (default redis://127.0.0.1:6379/15) and skips itself when none answers
 cd server && npm install && npm test
 
-# Whole stack: MongoDB replica set, Redis, the API on http://localhost:4000 and the worker
+# Whole stack: MongoDB replica set, Redis, API (:4000), worker, and the app on http://localhost:5173
 docker compose up -d --build
 
 # API on the host against the Docker MongoDB
 cp server/.env.example server/.env   # then set JWT_ACCESS_SECRET
 cd server && npm run dev
 cd server && npm run dev:worker      # in a second terminal: jobs and the sweep
+cd client && npm install && npm run dev   # React app on http://localhost:5173, proxies /api to :4000
+
+# Frontend tests (Vitest + React Testing Library)
+cd client && npm test
 
 # Admin account (needs ADMIN_EMAIL and ADMIN_PASSWORD in env or .env)
 cd server && npm run seed:admin
@@ -39,6 +43,7 @@ cd server && npm run seed:admin
 
 | Date | Step | Result |
 | --- | --- | --- |
+| 2026-11-23 | Phase 6b: React frontend | Vite and React 19 app with every SRS 4.2 page, the client in Compose behind nginx; 36 frontend tests; an end-to-end smoke test through the Vite proxy (19 checks) passed |
 | 2026-11-23 | Phase 6a: Organiser, admin, Swagger | Organiser events, edit view and sales; admin stats, user search, block and unblock; Swagger at `/docs`, with a test that every route is documented; 153 tests, 93% line coverage |
 | 2026-11-23 | Phase 5: Worker and jobs | BullMQ release-hold and email jobs, QR-code email, the sweep, a worker process in Compose; 136 tests, including real BullMQ on local Redis; 91% line coverage; an end-to-end smoke test with real API and worker processes passed |
 | 2026-11-23 | Phase 4: Booking | Confirm with idempotency and simulated payment, refund on paid-but-expired, sold out, my bookings, cancel; 114 tests, 94% line coverage; the parallel tests pass 5 runs out of 5 |
@@ -219,39 +224,95 @@ cd server && npm run seed:admin
   - `docs.test.js` (3): walks Express's router stack and fails if any route is missing from the spec, or the spec lists a route that does not exist
 - New dependency: `swagger-ui-express` 5.
 
+### Phase 6b details
+
+- `client/` uses Vite 8, React 19, React Router 7 and `qrcode`. It is plain CSS with colour tokens and a dark mode chosen step by step, works from phone width (NFR-12), and has no UI framework.
+- `src/api/client.js` is the only way the app reaches the API.
+  - The access token is kept in memory only.
+  - A 401 triggers one silent refresh through the `rt` cookie and one retry. Parallel 401s share one refresh, because the server rotates refresh tokens.
+  - It tracks the clock offset from the `Date` header, so countdowns follow the server clock.
+  - Every error is an `ApiError` carrying `code`, `requestId` and `retryAfter`.
+- `src/api/errors.js` turns each error code into plain language, saying what happened and what to do (NFR-12).
+- `AuthContext` restores the session on load through refresh (FR-20); `RequireAuth` guards routes by role.
+- Pages:
+  - events list with city and date filters kept in the URL (FR-21)
+  - event page (FR-21, FR-22):
+    - the seat map is polled every 5 s while the tab is visible
+    - a picked seat that someone else takes is dropped, with a message
+    - on SEAT_TAKEN the map is refreshed
+    - at most 6 seats can be picked
+    - only fan accounts can pick seats
+  - checkout (FR-23):
+    - a countdown to the server's `expiresAt`
+    - an `Idempotency-Key` from `crypto.randomUUID()`, saved with the hold in sessionStorage, so a reload or a Pay retry reuses it
+    - 402, 409 and network errors keep the same key for a retry; 410 ends the checkout
+    - a Release seats button
+  - my bookings (FR-24): QR tickets drawn in the browser, cancel with an inline confirmation, the 24-hour rule shown
+  - organiser (FR-25): my events, create and edit a draft with a section and row seat-map builder (prices typed in rupees, sent in paise), publish with a confirmation, sales tiles refreshed every 10 s
+  - admin (FR-18, FR-32): stat tiles, a bookings-per-minute column chart, failed holds and sell-out tables, user search with block and unblock
+- The chart (`BarChart.jsx`) follows the dataviz method:
+  - a single series, so no legend
+  - columns at most 24 px with a 4 px rounded top and a 2 px gap
+  - hairline gridlines and clean whole-number ticks
+  - a hover tooltip, plus arrow-key navigation on the focused chart
+  - a "Show table" view
+  - minutes grouped into buckets on narrow screens
+  - series colour `#2a78d6` (light) and `#3987e5` (dark), both passing the palette validator against their surfaces
+- Accessibility:
+  - a skip link
+  - seats have text labels and distinct shapes (dashed for held, hatched for booked), not colour alone
+  - `aria-pressed` on picked seats
+  - errors use `role="alert"`
+  - the countdown is announced each minute, not each second
+  - 44 px touch targets
+- Docker:
+  - `client/Dockerfile` builds with Node 22, then serves with `nginx:1.27-alpine`
+  - `nginx.conf` proxies `/api`, `/health` and `/docs` to `api:4000`, so the app and API share one origin (the cookie is SameSite=Strict)
+  - nginx serves `index.html` for client-side routes and caches hashed assets for a year
+  - Compose has a `client` service on port 5173, and the API gets `TRUST_PROXY=1`
+- Tests (`npm test`, 36):
+  - API client: refresh and retry, a shared refresh, session expiry, error fields, network errors
+  - Countdown: ticks, a single onExpire, urgency
+  - SeatMap: labels, which seats can be picked
+  - EventPage: hold → checkout, SEAT_TAKEN, the 6-seat cap, the 5 s refresh dropping a taken seat, guests and organisers
+  - CheckoutPage: SRS 9 "one key reused on Pay retry" (402 then 201), the key kept across a reload and a network error, 410, countdown expiry, release
+  - BarChart: ticks, bucketing, summary, hover, keyboard, table
+  - EventFormPage: rupees to paise, the edit load and PATCH, a published event locked
+- `client/scripts/vitest.mjs` starts Vitest with an upper-case drive letter. From a `c:\...` terminal (VS Code's default), Vitest otherwise loads itself twice and every test file fails with "failed to find the current suite".
+- An end-to-end smoke test ran the real API and worker, a temporary MongoDB, Redis database 14 and the Vite dev server. All 19 checks passed through the proxy:
+  - the app shell, client-side routes, `/health` and `/docs`
+  - the refresh cookie set on the app origin, and a silent refresh
+  - organiser create, edit view and publish
+  - list, hold, confirm, a replay with `Idempotent-Replayed`, my bookings
+  - sold out, sales, the worker email, logout
+
 ## Next steps
 
-- [ ] **Check Docker (left over from Phases 1, 3 and 5):** real Redis behaviour is now checked on Memurai; only the Docker stack is left.
+- [ ] **Check Docker (left over from Phases 1, 3, 5 and 6):** real Redis behaviour is now checked on Memurai; only the Docker stack is left.
     - start Docker Desktop
     - run `docker compose up -d --build --wait`
     - `curl localhost:4000/health` should show mongo and redis `ok`
     - `docker compose logs worker` should show "Worker started"
     - `docker compose stop redis` should leave the API serving with `/health` at 503, and the worker should log that it lost Redis
     - `docker compose stop worker` should exit cleanly (SIGTERM). This could not be tested on Windows, where Node cannot receive SIGTERM
+    - open http://localhost:5173: the app loads through nginx, and a reload keeps you logged in (the Secure cookie on http://localhost)
+- [ ] **Click through in a real browser** (`npm run dev` in `client/`, or Compose). There was no browser in the build session; the flows were checked with tests and HTTP only.
+    - sign up as a fan, pick seats, hold, watch the countdown, pay, see the QR ticket, cancel
+    - with two browsers on one event, see the other's hold appear within 5 s
+    - sign up as an organiser: create an event with two sections, edit it, publish, view sales
+    - make an admin (`npm run seed:admin`): stats chart, block a user and watch their tab get logged out
+    - try it at phone width, and in dark mode
 
-### Phase 6b: Frontend (FR-20 to FR-25, SRS 4.2)
+### Phase 7: Prove it (SRS 9, SRS 10)
 
-- [ ] React app with Vite in `client/`, talking only to `/api/v1`
-- [ ] Auth:
-    - the access token is kept in memory
-    - silent refresh through the `rt` cookie on load and on a 401
-    - `GET /me`
-    - consider a short grace window for two tabs refreshing at once (known limitation)
-- [ ] Pages:
-    - event list (city and date filters)
-    - event page with the seat map (available, held, booked), polling the cached seat map
-    - hold with a countdown to `expiresAt`
-    - checkout: one `Idempotency-Key` per hold, reused on Pay retry after a 402
-    - my bookings with ticket codes and cancel
-- [ ] Organiser pages: my events, create and edit a draft with a seat-map builder, publish, sales (the APIs exist since 6a)
-- [ ] Admin pages: stats, and user search with block and unblock (the APIs exist since 6a)
-- [ ] Add the client to Compose
-- [ ] Tests with Vitest and React Testing Library: countdown, seat-map states, the same key reused on Pay retry
-- [ ] **Done when:** the frontend tests pass and a full booking works in the browser against Compose
+- [ ] k6 load test on the local Docker stack, with the load-test profile (`RATE_LIMIT_IP_ENABLED=false`, `PAYMENT_DELAY_MS=0`, higher `RL_*_USER` limits): 1,000 virtual users booking 100 seats
+    - pass: 100 bookings, 0 double-bookings, 0 responses of 500, hold and confirm p95 under 300 ms (NFR-4)
+    - after each run: the duplicate-seat aggregation from SRS 9 returns `[]`, and booked seats equal the seats in confirmed bookings
+- [ ] Redis restart during load (`docker restart redis`): no lost or duplicated bookings, and holds still expire through the sweep
+- [ ] Deploy (open question: where), with the worker as its own process
+- [ ] README: what it is, architecture, how to run, test results, the k6 numbers with the machine they ran on
+- [ ] **Done when:** the duplicate-seat aggregation is empty after 1,000 users
 
-### Later phases (SRS section 10)
-
-- [ ] Phase 7: k6 load test, Redis restart test, deploy, README results
 
 ## Decisions made
 
@@ -305,6 +366,14 @@ cd server && npm run seed:admin
   - Failed-hold stats come back as `null` (not 503) when Redis is down, so the rest of the admin page still loads.
   - Admins cannot be blocked through the API.
   - The OpenAPI spec is hand-written rather than generated from the zod schemas. A test keeps it in step with the routes.
+- **Phase 6b**
+  - Plain CSS with tokens, no UI kit. That keeps the bundle small (about 105 KB gzipped) and gives full control over seat states and dark mode.
+  - The app reaches the API only through relative `/api` paths: the Vite proxy in development, nginx in Compose. One origin means the SameSite=Strict cookie just works, and CORS is not needed in the browser.
+  - The checkout key lives in sessionStorage beside the hold, never in a component, so a reload cannot create a second key for the same hold.
+  - QR codes are drawn in the browser from `ticketCode`; there is no image endpoint.
+  - The countdown uses the server clock (from the `Date` header) when the device clock is more than 1.5 s off.
+  - The seat map polls every 5 s and only while the tab is visible, which lightens load during a sale.
+  - Admin stats refresh every 15 s and sales every 10 s.
 - **Unchanged SRS decisions**
   - A failed payment (402) is not stored under the idempotency key, so the same key can retry.
   - The seat-map cache has a 2 s TTL and is not cleared on writes.
@@ -316,7 +385,9 @@ cd server && npm run seed:admin
 - While Redis is down, booking emails are not queued and are lost. Holds still expire through the sweep. A later fix could have the sweep queue emails for confirmed bookings with no `emailSentAt`.
 - On Windows, `npm run worker` cannot shut down gracefully on Ctrl+C or a kill. That is harmless, because jobs and releases are safe to re-run; Docker and Linux get the SIGTERM handler.
 
-- Two browser tabs refreshing at the same moment share one refresh token. The loser triggers reuse detection, which logs the user out. A short grace window can fix this in phase 6 if it shows up in the frontend.
+- Two browser tabs refreshing at the same moment share one refresh token. The loser triggers reuse detection, which logs the user out. The frontend makes this rare, because one tab shares a single refresh across its own requests, but two tabs opened at once can still hit it. The fix, if the browser check shows it, is a short grace window on the server for a just-rotated token.
+
+- In Compose the API trusts one proxy hop (`TRUST_PROXY=1`) for nginx, but port 4000 is also published directly. A client calling :4000 directly could set `X-Forwarded-For` to dodge per-IP limits. Per-user limits still apply. For a deployment, do not publish the API port.
 
 ## Open questions
 
