@@ -285,16 +285,20 @@ All routes start with `/api/v1` (except `/health` and `/docs`), take and return 
 | GET | /events | Guest | List published events; `?city=&from=&to=&page=&limit=` (limit max 50) | FR-5 |
 | GET | /events/:id | Guest | One event (cached) | FR-5 |
 | GET | /events/:id/seats | Guest | Seat map with status per seat (cached) | FR-6 |
-| GET | /organiser/events/:id/sales | Organiser (owner) | Seats sold, revenue, active holds | FR-31 |
+| GET | /organiser/events | Organiser | Your events, drafts included, newest first; `?status=&page=&limit=` | FR-25 |
+| GET | /organiser/events/:id | Organiser (owner) | One of your events with its seat map, for the edit form | FR-4, FR-25 |
+| GET | /organiser/events/:id/sales | Organiser (owner) | Seats by status, confirmed and cancelled bookings, revenue from confirmed bookings, active holds | FR-31 |
 | POST | /events/:id/holds | User | Body `{ seatIds: [...] }` → 201 with hold and `expiresAt` | FR-7, FR-8, FR-29 |
 | DELETE | /holds/:id | User (owner) | Release your own active hold | FR-10 |
 | POST | /holds/:id/confirm | User (owner) | Header `Idempotency-Key` (1 to 255 visible ASCII characters), no body; pays and books → 201 booking. A replayed response carries `Idempotent-Replayed: true` | FR-11 to FR-13 |
 | GET | /me/bookings | User | Your bookings with ticket codes, event and seat details, newest first; `?page=&limit=` (limit max 50) | FR-14 |
 | POST | /bookings/:id/cancel | User (owner) | Cancel up to 24 hours before the event; cancelling an already cancelled booking returns it unchanged | FR-14, FR-30 |
-| GET | /admin/stats | Admin | Bookings per minute, failed holds, sell-out times | FR-18 |
-| POST | /admin/users/:id/block | Admin | Block a user and revoke their refresh tokens | FR-32 |
+| GET | /admin/stats | Admin | Bookings per minute over `?minutes=` (default 60, max 1440), failed holds per event (null while Redis is down), sell-out times | FR-18 |
+| GET | /admin/users | Admin | Find accounts: `?q=` (email prefix), `role`, `status`, `page`, `limit` | FR-32 |
+| POST | /admin/users/:id/block | Admin | Block a user and revoke their refresh tokens; admin accounts cannot be blocked (403) | FR-32 |
 | POST | /admin/users/:id/unblock | Admin | Unblock a user | FR-32 |
 | GET | /health | Anyone | API, MongoDB and Redis status; 503 if a store is down | FR-19 |
+| GET | /docs, /docs/openapi.json | Anyone | Swagger UI and the OpenAPI 3 document | NFR-10 |
 
 ### 8.2 Errors
 

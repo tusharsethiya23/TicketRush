@@ -3,7 +3,7 @@
 Read this file first in every new session. Update it at the end of every step.
 
 - **Spec:** [docs/SRS.md](SRS.md) (SRS v2) is the source of truth. The live doc at https://claude.ai/artifact/XDy24h8RPCbb2onVi1qmW3 has the same content, minus the small additions made during the build.
-- **Current phase:** Phases 1 to 5 are done. The Docker check is still pending, because Docker Desktop wasn't running. Real Redis is now checked through a local Memurai. Next up is Phase 6 (React frontend).
+- **Current phase:** Phases 1 to 5 and Phase 6a (the rest of the API) are done. The Docker check is still pending, because Docker Desktop wasn't running. Real Redis is now checked through a local Memurai. Next up is Phase 6b (React frontend).
 - **Last updated:** 2026-11-23
 
 ## Workflow rules
@@ -39,6 +39,7 @@ cd server && npm run seed:admin
 
 | Date | Step | Result |
 | --- | --- | --- |
+| 2026-11-23 | Phase 6a: Organiser, admin, Swagger | Organiser events, edit view and sales; admin stats, user search, block and unblock; Swagger at `/docs`, with a test that every route is documented; 153 tests, 93% line coverage |
 | 2026-11-23 | Phase 5: Worker and jobs | BullMQ release-hold and email jobs, QR-code email, the sweep, a worker process in Compose; 136 tests, including real BullMQ on local Redis; 91% line coverage; an end-to-end smoke test with real API and worker processes passed |
 | 2026-11-23 | Phase 4: Booking | Confirm with idempotency and simulated payment, refund on paid-but-expired, sold out, my bookings, cancel; 114 tests, 94% line coverage; the parallel tests pass 5 runs out of 5 |
 | 2026-11-23 | Phase 3: Redis | Event and seat-map cache, rate limits, failed-holds counter, Redis in `/health`, fallback when Redis is down; 95 tests, 92% line coverage |
@@ -194,6 +195,30 @@ cd server && npm run seed:admin
   - with the worker stopped, the seat stayed held, then was freed when the worker restarted
   - a hold whose job was deleted was freed by the sweep alone
 
+### Phase 6a details
+
+- Phase 6 is split into 6a (the rest of the API) and 6b (the React frontend), so each lands as its own commit.
+- `modules/organiser` (organiser role; someone else's event is 404):
+  - `GET /organiser/events`: own events with drafts, newest first, `?status=`
+  - `GET /organiser/events/:id`: the event plus the seat map rebuilt from its seats (sorted by `_id`, which keeps the original section and row order), for the edit form
+  - `GET /organiser/events/:id/sales` (FR-31): seats by status, confirmed and cancelled bookings, revenue from confirmed bookings only, and active holds (unexpired only)
+- `modules/admin` (admin role):
+  - `GET /admin/stats` (FR-18):
+    - bookings per minute from MongoDB (`$dateTrunc`), with empty minutes as 0, over `?minutes=` (default 60)
+    - failed holds per event from `stats:failedHolds:*` through SCAN and MGET, joined with event names; `null` while Redis is down
+    - time to sell out from `soldOutAt - saleStartsAt`
+  - `GET /admin/users`: `?q=` email prefix (regex characters escaped), `role`, `status`
+  - `POST /admin/users/:id/block` and `/unblock` (FR-32): blocking sets the status and revokes every refresh token. `authenticate` re-reads the user, so the current access token stops at once. Admin accounts cannot be blocked, which also stops an admin blocking themselves.
+- Swagger (NFR-10):
+  - `src/docs/openapi.js` is a hand-written OpenAPI 3.0 spec: shared schemas, bearer and refresh-cookie security, error codes per route
+  - served at `/docs` (Swagger UI) and `/docs/openapi.json`
+  - helmet's CSP no longer sends `upgrade-insecure-requests`, which would break Swagger UI's assets on http://localhost
+- Tests:
+  - `organiser.test.js` (6)
+  - `admin.test.js` (8): stats windows, failed holds with Redis up and down, sell-out times, search, block with token revocation and instant lockout, unblock, admin protection
+  - `docs.test.js` (3): walks Express's router stack and fails if any route is missing from the spec, or the spec lists a route that does not exist
+- New dependency: `swagger-ui-express` 5.
+
 ## Next steps
 
 - [ ] **Check Docker (left over from Phases 1, 3 and 5):** real Redis behaviour is now checked on Memurai; only the Docker stack is left.
@@ -204,7 +229,7 @@ cd server && npm run seed:admin
     - `docker compose stop redis` should leave the API serving with `/health` at 503, and the worker should log that it lost Redis
     - `docker compose stop worker` should exit cleanly (SIGTERM). This could not be tested on Windows, where Node cannot receive SIGTERM
 
-### Phase 6: Frontend (FR-20 onwards, SRS 4.2)
+### Phase 6b: Frontend (FR-20 to FR-25, SRS 4.2)
 
 - [ ] React app with Vite in `client/`, talking only to `/api/v1`
 - [ ] Auth:
@@ -218,9 +243,8 @@ cd server && npm run seed:admin
     - hold with a countdown to `expiresAt`
     - checkout: one `Idempotency-Key` per hold, reused on Pay retry after a 402
     - my bookings with ticket codes and cancel
-- [ ] Organiser pages: create and edit a draft with a seat-map builder, publish, sales (needs `GET /organiser/events/:id/sales`, FR-31)
-- [ ] Admin: `GET /admin/stats` (FR-18: bookings per minute, `stats:failedHolds:*`, time to sell out from `soldOutAt`), block and unblock (FR-32)
-- [ ] Swagger at `/docs`
+- [ ] Organiser pages: my events, create and edit a draft with a seat-map builder, publish, sales (the APIs exist since 6a)
+- [ ] Admin pages: stats, and user search with block and unblock (the APIs exist since 6a)
 - [ ] Add the client to Compose
 - [ ] Tests with Vitest and React Testing Library: countdown, seat-map states, the same key reused on Pay retry
 - [ ] **Done when:** the frontend tests pass and a full booking works in the browser against Compose
@@ -275,6 +299,12 @@ cd server && npm run seed:admin
   - Email goes through any SMTP service set by `SMTP_URL`. Without it, emails are logged, so local runs and the demo need no account. This narrows the email open question to which service the demo uses.
   - `bookings.emailSentAt` makes the email job safe to re-run.
   - A real-Redis test file runs when Redis answers at `REDIS_TEST_URL`. It only touches `trtest:*` and its own `rl:*` keys, and never runs FLUSHALL. The ioredis-mock restore is in a `finally`, because `clearTestDb` flushes whatever `getRedis()` returns.
+- **Phase 6a**
+  - The organiser edit view rebuilds the seat map from the seats instead of storing a second copy on the event, so there is one source of truth.
+  - Sales revenue counts confirmed bookings only. A cancel has no refund (SRS 6.4), but its seats are back on sale.
+  - Failed-hold stats come back as `null` (not 503) when Redis is down, so the rest of the admin page still loads.
+  - Admins cannot be blocked through the API.
+  - The OpenAPI spec is hand-written rather than generated from the zod schemas. A test keeps it in step with the routes.
 - **Unchanged SRS decisions**
   - A failed payment (402) is not stored under the idempotency key, so the same key can retry.
   - The seat-map cache has a 2 s TTL and is not cleared on writes.
