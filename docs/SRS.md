@@ -288,9 +288,9 @@ All routes start with `/api/v1` (except `/health` and `/docs`), take and return 
 | GET | /organiser/events/:id/sales | Organiser (owner) | Seats sold, revenue, active holds | FR-31 |
 | POST | /events/:id/holds | User | Body `{ seatIds: [...] }` → 201 with hold and `expiresAt` | FR-7, FR-8, FR-29 |
 | DELETE | /holds/:id | User (owner) | Release your own active hold | FR-10 |
-| POST | /holds/:id/confirm | User (owner) | Header `Idempotency-Key`; pays and books → 201 booking | FR-11 to FR-13 |
-| GET | /me/bookings | User | Your bookings with ticket codes, newest first | FR-14 |
-| POST | /bookings/:id/cancel | User (owner) | Cancel up to 24 hours before the event | FR-14, FR-30 |
+| POST | /holds/:id/confirm | User (owner) | Header `Idempotency-Key` (1 to 255 visible ASCII characters), no body; pays and books → 201 booking. A replayed response carries `Idempotent-Replayed: true` | FR-11 to FR-13 |
+| GET | /me/bookings | User | Your bookings with ticket codes, event and seat details, newest first; `?page=&limit=` (limit max 50) | FR-14 |
+| POST | /bookings/:id/cancel | User (owner) | Cancel up to 24 hours before the event; cancelling an already cancelled booking returns it unchanged | FR-14, FR-30 |
 | GET | /admin/stats | Admin | Bookings per minute, failed holds, sell-out times | FR-18 |
 | POST | /admin/users/:id/block | Admin | Block a user and revoke their refresh tokens | FR-32 |
 | POST | /admin/users/:id/unblock | Admin | Unblock a user | FR-32 |

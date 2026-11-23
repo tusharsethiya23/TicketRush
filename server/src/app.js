@@ -12,6 +12,7 @@ const authRoutes = require('./modules/auth/auth.routes');
 const meRoutes = require('./modules/me/me.routes');
 const eventsRoutes = require('./modules/events/events.routes');
 const holdsRoutes = require('./modules/holds/holds.routes');
+const bookingsRoutes = require('./modules/bookings/bookings.routes');
 
 function createApp() {
   const app = express();
@@ -20,7 +21,13 @@ function createApp() {
   app.set('trust proxy', config.TRUST_PROXY); // req.ip is the client, not the proxy, for per-IP limits
   app.use(requestLogger);
   app.use(helmet());
-  app.use(cors({ origin: config.CORS_ORIGIN, credentials: true })); // NFR-8
+  app.use(
+    cors({
+      origin: config.CORS_ORIGIN,
+      credentials: true, // NFR-8
+      exposedHeaders: ['Retry-After', 'RateLimit-Limit', 'RateLimit-Remaining', 'Idempotent-Replayed', 'X-Request-Id'],
+    }),
+  );
   app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
   app.use(mongoSanitize()); // NFR-7: strips $-operators and dotted keys from user input
@@ -31,6 +38,7 @@ function createApp() {
   app.use('/api/v1/me', meRoutes);
   app.use('/api/v1/events', eventsRoutes);
   app.use('/api/v1/holds', holdsRoutes);
+  app.use('/api/v1/bookings', bookingsRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

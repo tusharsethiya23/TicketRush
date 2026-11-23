@@ -22,6 +22,10 @@ const schema = z.object({
   HOLD_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   MAX_ACTIVE_HOLDS_PER_EVENT: z.coerce.number().int().positive().default(2),
 
+  // Simulated payments (FR-12). Tests set the rate to 1 and force failures with a mock.
+  PAYMENT_SUCCESS_RATE: z.coerce.number().min(0).max(1).default(0.9),
+  PAYMENT_DELAY_MS: z.coerce.number().int().min(0).max(30_000).default(200),
+
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   COOKIE_SECURE: bool.optional(),
   // Number of proxy hops to trust for req.ip (0 = none). Set to 1 behind one reverse proxy.

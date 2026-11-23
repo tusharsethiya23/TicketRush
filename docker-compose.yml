@@ -39,6 +39,8 @@ services:
       MONGO_URI: mongodb://mongo:27017/ticketrush?replicaSet=rs0
       REDIS_URL: redis://redis:6379
       RATE_LIMIT_IP_ENABLED: ${RATE_LIMIT_IP_ENABLED:-true}
+      PAYMENT_SUCCESS_RATE: ${PAYMENT_SUCCESS_RATE:-0.9}
+      PAYMENT_DELAY_MS: ${PAYMENT_DELAY_MS:-200}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-local-dev-only-secret-do-not-use-in-production}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
     depends_on:

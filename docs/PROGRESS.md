@@ -3,7 +3,7 @@
 Read this file first in every new session. Update it at the end of every step.
 
 - **Spec:** [docs/SRS.md](SRS.md) (SRS v2) is the source of truth. The live doc at https://claude.ai/artifact/XDy24h8RPCbb2onVi1qmW3 has the same content, minus the small additions made during the build.
-- **Current phase:** Phases 1 to 3 are done. The Docker and real-Redis check is still pending, because Docker Desktop wasn't running. Next up is Phase 4 (booking).
+- **Current phase:** Phases 1 to 4 are done. The Docker and real-Redis check is still pending, because Docker Desktop wasn't running. Next up is Phase 5 (BullMQ worker, emails, expiry and sweep).
 - **Last updated:** 2026-11-23
 
 ## Workflow rules
@@ -36,6 +36,7 @@ cd server && npm run seed:admin
 
 | Date | Step | Result |
 | --- | --- | --- |
+| 2026-11-23 | Phase 4: Booking | Confirm with idempotency and simulated payment, refund on paid-but-expired, sold out, my bookings, cancel; 114 tests, 94% line coverage; the parallel tests pass 5 runs out of 5 |
 | 2026-11-23 | Phase 3: Redis | Event and seat-map cache, rate limits, failed-holds counter, Redis in `/health`, fallback when Redis is down; 95 tests, 92% line coverage |
 | 2026-11-23 | Phase 2: Events and safe holds | Event create, edit, publish, list and seat map; holds and early release; bounded-retry transactions. The race tests pass 6 runs out of 6; 83 tests in all, with 94% line coverage |
 | 2026-11-23 | Phase 1: Foundation | Express API, 8 models with SRS 7.1 indexes, auth with refresh rotation, admin seed, Docker Compose; 44 tests pass with 93% line coverage |
@@ -118,6 +119,38 @@ cd server && npm run seed:admin
   - Tests use `ioredis-mock`, with per-IP limits off in the test env.
 - A smoke test with the real server and no Redis gave: `/health` 503 in 11 ms, register 201, events 200, one warning line.
 
+### Phase 4 details
+
+- `src/lib/payments.js` is the payment simulator.
+  - It waits `PAYMENT_DELAY_MS` (200) and succeeds with probability `PAYMENT_SUCCESS_RATE` (0.9).
+  - Code calls `payments.charge`, so tests force an outcome with `jest.spyOn(payments, 'charge')`. The test env sets the rate to 1 and the delay to 0.
+- `modules/bookings/bookings.service.js`:
+  - `confirmHold` follows SRS 6.2:
+    - claim the key: the unique `(userId, key)` insert wins; a loser replays the stored result, or gets 422, 409 `REQUEST_IN_PROGRESS`, or takes over a `processing` key older than 60 s
+    - the request hash is the hold ID, because confirm takes no body; one key on a different hold gives 422
+    - check the hold: not the user's gives 404; not active or expired gives a stored 410, with no charge
+    - pay outside the transaction, and record a `payments` row (succeeded or failed)
+    - book in one transaction: hold active → converted, seats held → booked, insert the booking (`ticketCode` like `TR-3F9A1C2B7D4E`), mark the key completed with the 201 body
+  - Only 201 and 410 are stored. Every other outcome (402, 404, 409, 500) deletes the key, so the same key can retry.
+  - Any failure after a successful charge records a refund. A hold that expired or was released during payment gives a stored 410.
+  - `markSoldOutIfFull` runs after commit. When every seat of the event is booked it sets `sold_out`, sets `soldOutAt` only if empty, and clears `event:<id>`. It never fails the confirm.
+  - `listMyBookings` returns bookings newest first with event and seat details, paginated (max 50).
+  - `cancelBooking` follows SRS 6.4. The 24-hour window gives 409 `CANCEL_WINDOW_CLOSED`. One transaction sets the booking cancelled, the seats back to available with `holdId: null`, and `sold_out` back to `on_sale` with `soldOutAt` kept. A second cancel returns the cancelled booking.
+- Routes:
+  - `POST /holds/:id/confirm`: confirm limiters, then `authenticate`, user role, empty body. A missing `Idempotency-Key` gives 428; a malformed one gives 400. A replay carries `Idempotent-Replayed: true`, and a replayed 410 carries the new request ID.
+  - `GET /me/bookings` and `POST /bookings/:id/cancel`
+- CORS now exposes `Retry-After`, `RateLimit-*`, `Idempotent-Replayed` and `X-Request-Id` to the frontend.
+- New config: `PAYMENT_SUCCESS_RATE` and `PAYMENT_DELAY_MS`, also passed through in Compose.
+- Tests in `bookings.test.js` (19), through a real HTTP server:
+  - SRS 9 idempotency: 5 parallel confirms with one key give 1 booking and 1 charge, and a sixth gets the identical 201
+  - SRS 9 payment retry: 402 frees the key, then the same key gives 201
+  - paid-but-expired: 410, refund recorded, the 410 replayed
+  - two keys racing on one hold: 1 booking, and the loser is refunded
+  - stale-key takeover, 422, 428, 400, 403, 404, the confirm rate limit
+  - sold out, including the cache cleared
+  - my bookings
+  - SRS 9 cancel then rebook, a second sell-out keeping the first `soldOutAt`, the 24-hour window, cancelling twice
+
 ## Next steps
 
 - [ ] **Check Docker and real Redis (left over from Phases 1 and 3):**
@@ -127,34 +160,23 @@ cd server && npm run seed:admin
     - check that rate limiting works on real Redis (`MULTI` with `SET NX PX` has only been tested on ioredis-mock)
     - `docker compose stop redis` should leave the API serving with `/health` at 503
 
-### Phase 4: Booking (FR-11 to FR-14, FR-28, FR-30)
+### Phase 5: Worker and jobs (FR-9, FR-15, FR-16, NFR-6)
 
-- [ ] Payment simulator: `PAYMENT_SUCCESS_RATE` and `PAYMENT_DELAY_MS`, with a way to force the outcome in tests
-- [ ] `POST /holds/:id/confirm` following SRS 6.2:
-    - claim the idempotency key, keyed on `(userId, key)`, with a request hash
-    - check the hold
-    - pay outside the transaction
-    - book in one transaction: hold active → converted, seats held → booked, insert the booking with a `ticketCode`, mark the key completed
-    - if the hold expired during payment, refund and return 410
-- [ ] Idempotency responses:
-    - same key and same body after completion: the stored response
-    - a different body: 422
-    - still in flight: 409 `REQUEST_IN_PROGRESS`, with a stale `processing` record taken over after 60 s
-    - a 402 deletes the key so the same key can retry
-    - a missing header: 428
-- [ ] Apply the confirm limiters (`limiters.confirmByUser/confirmByIp` already exist)
-- [ ] Mark the event `sold_out` with `soldOutAt` when the last seat is booked (FR-28), and invalidate `event:<id>`
-- [ ] `GET /me/bookings` (newest first, with ticket codes) and `POST /bookings/:id/cancel` (SRS 6.4: the 24-hour window, seats back to available, `sold_out` back to `on_sale`)
+- [ ] BullMQ queue and a separate worker process (`src/worker.js`), sharing models and config with the API
+- [ ] `release-hold` delayed job, with `jobId = holdId` and a delay equal to the TTL, added after a hold commits; the job calls `releaseHold(holdId, { reason: 'expired' })`
+- [ ] Remove the `release-hold` job after a confirm or an early release (best effort; the release is a no-op on a converted hold anyway)
+- [ ] Sweep every minute: find active holds with `expiresAt <= now` through the `(status, expiresAt)` index and release each one. This also covers the time Redis is down
+- [ ] Confirmation email job after a booking, with a QR code of `ticketCode`. Retries 3 times with exponential backoff (1 s, 4 s, 16 s), then stays in the failed set (FR-16). Email service still to be decided (open question)
+- [ ] Enqueue failures must never fail a hold or a confirm (NFR-5); the sweep is the safety net
+- [ ] Add the worker to Docker Compose
 - [ ] Tests:
-    - idempotency: 5 parallel requests with one key give 1 booking
-    - payment retry: 402 then 201
-    - paid-but-expired: 410 and a refund
-    - cancel, then rebook
-- [ ] **Done when:** the idempotency, payment-retry and cancel tests pass
+    - expiry with `HOLD_TTL_SECONDS=5` and the sweep triggered directly: the seat is available again
+    - confirm vs expiry race with `PAYMENT_DELAY_MS` near the TTL: either booked or 410 with the seats available and a refund, never both, never neither
+    - email job retries and backoff
+- [ ] **Done when:** the expiry and confirm-vs-expiry tests pass
 
 ### Later phases (SRS section 10)
 
-- [ ] Phase 5: BullMQ worker, emails, QR codes, expiry and sweep
 - [ ] Phase 6: React frontend, admin and organiser pages, Swagger, worker and client in Compose
 - [ ] Phase 7: k6 load test, Redis restart test, deploy, README results
 
@@ -188,12 +210,22 @@ cd server && npm run seed:admin
   - The per-user overall limit (120 a minute) is enforced inside `authenticate`, so every signed-in route gets it with no extra wiring.
   - Invalid requests (400) still count toward limits, because the limiter runs before validation.
   - `/health` returns 503 when Redis alone is down. That is the SRS rule, but bookings keep working.
+- **Phase 4**
+  - The idempotency request hash covers only the hold ID, because confirm takes no body (a body gives 400).
+  - Only 201 and 410 are stored. A 404 or a 409 `CONFLICT` also frees the key, like a 402.
+  - A refund is recorded for any failure after a successful charge, not only an expired hold, so a payment never ends with neither a booking nor a refund.
+  - Sold out means every seat is `booked`. Seats still held do not count, because their holds can expire.
+  - The sold-out check runs after commit, outside the booking transaction. Inside it, two parallel last-seat bookings would each miss the other's seats (write skew), and a shared event-document counter would make every confirm conflict under load.
+  - Cancelling an already cancelled booking returns 200 with the booking, so retries are safe. No new error code was needed.
+  - `GET /me/bookings` works for any signed-in role; organisers and admins just get an empty list.
 - **Unchanged SRS decisions**
   - A failed payment (402) is not stored under the idempotency key, so the same key can retry.
   - The seat-map cache has a 2 s TTL and is not cleared on writes.
   - Load tests run on the local Docker stack, not on Atlas M0.
 
 ## Known limitations
+
+- A cancel can commit between the sold-out check and the sold-out update of a confirm. The event then shows `sold_out` with one seat available. This is very rare and only cosmetic, because holds check the seats, not the event status, and `sold_out` events still accept holds. The phase 5 sweep could re-check it.
 
 - Two browser tabs refreshing at the same moment share one refresh token. The loser triggers reuse detection, which logs the user out. A short grace window can fix this in phase 6 if it shows up in the frontend.
 
