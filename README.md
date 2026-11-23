@@ -4,6 +4,8 @@ A flash-sale ticket booking system (MERN) built around one rule: **a seat is nev
 
 Fans pick seats on a live seat map, hold them for 5 minutes and pay. Organisers build events and seat maps and watch sales. Admins see live stats and can block abusive accounts. Under load, the API keeps every booking consistent with every seat and every payment, and it keeps working when Redis goes down.
 
+**Live demo: [ticketrush-knzk.onrender.com](https://ticketrush-knzk.onrender.com)** · API docs: [/docs](https://ticketrush-knzk.onrender.com/docs). It runs on Render's free plan, so the first visit after a quiet spell can take about a minute to wake up. Payments are simulated; no real card is charged.
+
 **Load test (1,000 fans, 100 seats): 100 bookings, 0 double-bookings, 0 server errors.** See [Results](#load-test-results).
 
 ## How it never double-books
