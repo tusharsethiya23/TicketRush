@@ -3,7 +3,7 @@
 Read this file first in every new session. Update it at the end of every step.
 
 - **Spec:** [docs/SRS.md](SRS.md) (SRS v2) is the source of truth. The live doc at https://claude.ai/artifact/XDy24h8RPCbb2onVi1qmW3 has the same content, minus the small additions made during the build.
-- **Current phase:** Phases 1 to 6 are done. Two checks are still pending: the Docker stack (Docker Desktop wasn't running) and a click-through in a real browser. Next up is Phase 7 (load test, Redis restart test, deploy, README).
+- **Current phase:** Phases 1 to 7 are built. The load test, the Redis restart test and the README are done. Still open: deploy (needs a host decision), re-running the load test on Docker, and a click-through in a real browser.
 - **Last updated:** 2026-11-23
 
 ## Workflow rules
@@ -43,6 +43,7 @@ cd server && npm run seed:admin
 
 | Date | Step | Result |
 | --- | --- | --- |
+| 2026-11-23 | Phase 7: Prove it | k6 flash sale (1,000 fans and 100 seats: 0 double-bookings, 0 server errors), sustained load (p95 hold 124 ms, confirm 204 ms), Redis killed mid-sale (all checks pass), `WEB_CONCURRENCY` cluster mode, README with results; the burst p95 misses 300 ms on this laptop (see Phase 7 details) |
 | 2026-11-23 | Phase 6b: React frontend | Vite and React 19 app with every SRS 4.2 page, the client in Compose behind nginx; 36 frontend tests; an end-to-end smoke test through the Vite proxy (19 checks) passed |
 | 2026-11-23 | Phase 6a: Organiser, admin, Swagger | Organiser events, edit view and sales; admin stats, user search, block and unblock; Swagger at `/docs`, with a test that every route is documented; 153 tests, 93% line coverage |
 | 2026-11-23 | Phase 5: Worker and jobs | BullMQ release-hold and email jobs, QR-code email, the sweep, a worker process in Compose; 136 tests, including real BullMQ on local Redis; 91% line coverage; an end-to-end smoke test with real API and worker processes passed |
@@ -286,6 +287,34 @@ cd server && npm run seed:admin
   - list, hold, confirm, a replay with `Idempotent-Replayed`, my bookings
   - sold out, sales, the worker email, logout
 
+### Phase 7 details
+
+- `loadtest/flash-sale.js` is the k6 script.
+  - `setup` makes an organiser, an event with `SEATS` seats and `USERS` fans, then publishes it.
+  - Burst mode: fans wait in a 3 s lobby (one seat-map read, which opens their keep-alive connection), then all buy at the opening.
+  - Steady mode: fans arrive at a constant rate.
+  - Each fan holds 1 random available seat, pays with an Idempotency-Key, and retries a lost race up to 5 times. `REPLAY_RATE` re-sends the confirm and checks it returns the same booking; `ABANDON_RATE` walks away from the hold.
+  - Thresholds: hold and confirm p95 under 300 ms, 0 server errors or connection failures, 0 unexpected statuses, 0 replay mismatches.
+- `loadtest/verify.js` (Node, uses the server's mongoose and `MONGO_URI`) checks:
+  - the SRS 9 duplicate-seat aggregation
+  - booked seats against confirmed bookings, and each booked seat's hold
+  - successful charges against bookings
+  - no stale active holds
+  - held seats against active holds
+- `loadtest/docker-compose.loadtest.yml` is the load-test profile: per-IP limits off, per-user limits raised, payment 0 ms and always succeeding, bcrypt 4, `LOG_LEVEL=warn`, `WEB_CONCURRENCY=4`.
+- Results (native stack on the i5-12500H laptop, 4 API processes; summaries in `loadtest/results/`):
+  - burst, 1,000 fans and 100 seats: 100 bookings, 0 double-bookings, 0 server errors; hold p95 3.18 s, confirm p95 2.15 s
+  - sustained, 1,000 fans over 20 s and 1,000 seats: 996 bookings, all thresholds pass; hold p95 124 ms, confirm p95 204 ms
+  - Redis killed for 12 s mid-sale and restarted empty (600 fans over 60 s, 300 seats, 30% abandon, 20% replay, 20 s TTL, 5 s sweep):
+    - 285 bookings, 0 server errors, all verify checks pass
+    - 130 release jobs were lost in the outage, and the sweep still released all 90 abandoned holds
+- What the investigation found:
+  - **Refused connections:** 1,000 fans connecting in the same instant overflowed the listen backlog. The API now asks for a backlog of 4,096, but Windows caps it at about 200 and answers the overflow with a reset (Linux drops it, and the client retries). The lobby phase models fans who are already on the page, which removed every refusal.
+  - **The API was CPU-bound on one core** (118%). A profile showed no hotspot: the time was spread across the MongoDB driver, Mongoose and BSON, about 38%. Hence `WEB_CONCURRENCY` (node:cluster): 4 processes cut the burst hold p95 from about 4.8 s to about 3 s; 8 were no better.
+  - **The real limit is MongoDB transaction throughput:** about 1,000 a second from one process and about 1,900 from four, on this laptop's single-node replica set (measured). The burst needs over 2,000 in its first second, so the tail waits 2–3 s. Uncontended, a hold takes about 30 ms and a confirm about 50 ms server-side.
+  - **Tried and reverted:** a read-only pre-check that answers lost races without a transaction, and reading the event through the Redis cache in the hold path. Neither changed the burst numbers beyond run-to-run noise, so the code stays simpler.
+- `WEB_CONCURRENCY` (default 1): the primary process syncs indexes once (`connectMongo(..., { syncIndexes })`), forks N API processes sharing the port, and replaces any that crash. The crash-and-replace path has not been tested.
+
 ## Next steps
 
 - [ ] **Check Docker (left over from Phases 1, 3, 5 and 6):** real Redis behaviour is now checked on Memurai; only the Docker stack is left.
@@ -303,16 +332,15 @@ cd server && npm run seed:admin
     - make an admin (`npm run seed:admin`): stats chart, block a user and watch their tab get logged out
     - try it at phone width, and in dark mode
 
-### Phase 7: Prove it (SRS 9, SRS 10)
+### Still open after Phase 7
 
-- [ ] k6 load test on the local Docker stack, with the load-test profile (`RATE_LIMIT_IP_ENABLED=false`, `PAYMENT_DELAY_MS=0`, higher `RL_*_USER` limits): 1,000 virtual users booking 100 seats
-    - pass: 100 bookings, 0 double-bookings, 0 responses of 500, hold and confirm p95 under 300 ms (NFR-4)
-    - after each run: the duplicate-seat aggregation from SRS 9 returns `[]`, and booked seats equal the seats in confirmed bookings
-- [ ] Redis restart during load (`docker restart redis`): no lost or duplicated bookings, and holds still expire through the sweep
-- [ ] Deploy (open question: where), with the worker as its own process
-- [ ] README: what it is, architecture, how to run, test results, the k6 numbers with the machine they ran on
-- [ ] **Done when:** the duplicate-seat aggregation is empty after 1,000 users
-
+- [ ] **Deploy** (open question: where). It needs a MongoDB replica set (for example Atlas), a Redis, the API, the worker as its own process, and the client behind one origin (nginx, or a host that proxies `/api`). Do not publish the API port directly, because of `TRUST_PROXY`.
+- [ ] **Re-run the load test on Docker** once Docker Desktop runs, and add those numbers to the README:
+    - `docker compose -f docker-compose.yml -f loadtest/docker-compose.loadtest.yml up -d --build --wait`
+    - `k6 run loadtest/flash-sale.js`
+    - `node loadtest/verify.js <eventId>`
+    - for the restart test: `HOLD_TTL_SECONDS=20 SWEEP_INTERVAL_SECONDS=5`, then `k6 run -e MODE=steady -e DURATION=60s -e USERS=600 -e SEATS=300 -e ABANDON_RATE=0.3 loadtest/flash-sale.js`, with `docker restart redis` during the run
+- [ ] **Optional, if the burst p95 matters:** measure on Linux or Docker first. If it still misses, the levers are MongoDB hardware or a three-member replica set on separate disks, and fewer round trips per hold.
 
 ## Decisions made
 
@@ -374,6 +402,12 @@ cd server && npm run seed:admin
   - The countdown uses the server clock (from the `Date` header) when the device clock is more than 1.5 s off.
   - The seat map polls every 5 s and only while the tab is visible, which lightens load during a sale.
   - Admin stats refresh every 15 s and sales every 10 s.
+- **Phase 7**
+  - The load test runs natively here (Docker was unavailable): a throwaway Memurai on a spare port and an in-memory MongoDB replica set, the API and worker as real processes, k6 2.4 as a portable binary. The repo's instructions use Docker.
+  - The burst models fans already on the event page (a 3 s lobby) rather than 1,000 new TCP connections in one instant. Real fans load the page first, and Windows' backlog cap would otherwise turn the test into a test of the OS.
+  - Results are reported as measured, including the burst p95 miss. The target was not redefined to pass.
+  - Optimisations that did not measurably help were reverted.
+  - `WEB_CONCURRENCY` defaults to 1 so small deployments are unchanged; the load profile uses 4.
 - **Unchanged SRS decisions**
   - A failed payment (402) is not stored under the idempotency key, so the same key can retry.
   - The seat-map cache has a 2 s TTL and is not cleared on writes.
@@ -388,6 +422,8 @@ cd server && npm run seed:admin
 - Two browser tabs refreshing at the same moment share one refresh token. The loser triggers reuse detection, which logs the user out. The frontend makes this rare, because one tab shares a single refresh across its own requests, but two tabs opened at once can still hit it. The fix, if the browser check shows it, is a short grace window on the server for a just-rotated token.
 
 - In Compose the API trusts one proxy hop (`TRUST_PROXY=1`) for nginx, but port 4000 is also published directly. A client calling :4000 directly could set `X-Forwarded-For` to dodge per-IP limits. Per-user limits still apply. For a deployment, do not publish the API port.
+
+- Burst latency: at 1,000 fans pressing Book in the same instant, hold and confirm p95 are 2–3 s on the test laptop, because MongoDB's transaction rate is the limit there (NFR-4 misses; sustained load meets it). Correctness is unaffected.
 
 ## Open questions
 

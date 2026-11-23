@@ -1,0 +1,27 @@
+# Load-test profile (SRS 8.3, SRS 9). Use on top of the main file:
+#   docker compose -f docker-compose.yml -f loadtest/docker-compose.loadtest.yml up -d --build --wait
+#
+# - k6 sends everything from one IP, so per-IP limits are off; per-user limits are raised
+#   so retries after lost races are not throttled.
+# - Payments always succeed instantly (NFR-4 is measured with payment delay 0).
+# - bcrypt cost 4 so that signing up 1,000 fans in setup takes seconds, not minutes.
+# - 4 API processes (node:cluster); the worker ignores WEB_CONCURRENCY.
+# - Request logs off: at 1,000 concurrent users they cost more than the requests.
+x-loadtest-env: &loadtest-env
+  WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+  RATE_LIMIT_IP_ENABLED: "false"
+  RL_ALL_USER: "1000"
+  RL_HOLD_USER: "100"
+  RL_CONFIRM_USER: "100"
+  PAYMENT_SUCCESS_RATE: "1"
+  PAYMENT_DELAY_MS: "0"
+  BCRYPT_ROUNDS: "4"
+  LOG_LEVEL: "warn"
+  HOLD_TTL_SECONDS: ${HOLD_TTL_SECONDS:-300}
+  SWEEP_INTERVAL_SECONDS: ${SWEEP_INTERVAL_SECONDS:-60}
+
+services:
+  api:
+    environment: *loadtest-env
+  worker:
+    environment: *loadtest-env

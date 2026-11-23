@@ -10,6 +10,9 @@ const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
+  // API processes (node:cluster). 1 = a single process. All state is in MongoDB and Redis,
+  // so any process can serve any request.
+  WEB_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(1),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
   MONGO_URI: z.string().min(1),

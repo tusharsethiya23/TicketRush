@@ -15,9 +15,10 @@ async function ensureIndexes() {
   }
 }
 
-async function connectMongo(uri = config.MONGO_URI, options = {}) {
+/** `syncIndexes: false` for cluster workers: the primary process has already done it. */
+async function connectMongo(uri = config.MONGO_URI, options = {}, { syncIndexes = true } = {}) {
   await mongoose.connect(uri, { serverSelectionTimeoutMS: 10_000, autoIndex: false, ...options });
-  await ensureIndexes();
+  if (syncIndexes) await ensureIndexes();
   return mongoose.connection;
 }
 

@@ -1,0 +1,58 @@
+# k6 summary: burst (native stack, WEB_CONCURRENCY=4, 2026-11-23)
+
+  █ THRESHOLDS 
+    http_req_duration{name:confirm}
+    ✗ 'p(95)<300' p(95)=2.15s
+    http_req_duration{name:hold}
+    ✗ 'p(95)<300' p(95)=3.18s
+    replay_mismatch
+    ✓ 'count==0' count=0
+    server_errors
+    ✓ 'count==0' count=0
+    unexpected_responses
+    ✓ 'count==0' count=0
+  █ TOTAL RESULTS 
+    checks_total.......: 100     6.79721/s
+    checks_succeeded...: 100.00% 100 out of 100
+    checks_failed......: 0.00%   0 out of 100
+    ✓ confirm is 201
+    CUSTOM
+    bookings.......................: 100    6.79721/s
+    hold_conflicts.................: 1392   94.617167/s
+    replay_mismatch................: 0      0/s
+    server_errors..................: 0      0/s
+    sold_out_seen..................: 900    61.174892/s
+    unexpected_responses...........: 0      0/s
+    HTTP
+    http_req_duration..............: avg=533.55ms min=0s      med=94.87ms p(90)=2.15s   p(95)=2.99s    p(99)=3.21s max=3.51s
+      { expected_response:true }...: avg=157.17ms min=0s      med=9.72ms  p(90)=409.3ms p(95)=518.09ms p(99)=1.61s max=2.21s
+      { name:confirm }.............: avg=1.26s    min=56.64ms med=1.56s   p(90)=2.08s   p(95)=2.15s    p(99)=2.2s  max=2.21s
+      { name:hold }................: avg=1.98s    min=71.21ms med=2.11s   p(90)=3.12s   p(95)=3.18s    p(99)=3.27s max=3.51s
+    http_req_failed................: 19.89% 1392 out of 6997
+    http_reqs......................: 6997   475.600802/s
+    EXECUTION
+    iteration_duration.............: avg=7.74s    min=4.45s   med=7.82s   p(90)=8.31s   p(95)=8.37s    p(99)=8.48s max=8.55s
+    iterations.....................: 1000   67.972103/s
+    vus............................: 724    min=0            max=1000
+    vus_max........................: 1000   min=1000         max=1000
+    NETWORK
+    data_received..................: 47 MB  3.2 MB/s
+    data_sent......................: 1.7 MB 114 kB/s
+time="2026-11-23T12:59:51+05:30" level=error msg="thresholds on metrics 'http_req_duration{name:confirm}, http_req_duration{name:hold}' have been crossed"
+
+# loadtest/verify.js
+
+Database ticketrush, event 6b03eb63b6d393410702a1e1
+
+PASS  No seat in two confirmed bookings (SRS 9 aggregation is empty): []
+PASS  Booked seats == seats in confirmed bookings: 100 booked, 100 in bookings
+PASS  Every booked seat belongs to its booking’s hold: 0 mismatched
+PASS  Successful charges == confirmed bookings (refunds counted apart): 100 charged, 100 bookings, 0 refunded
+PASS  No active hold expired more than 90 s ago: 0 stale
+PASS  Every held seat belongs to an active hold: 0 held, 0 stray
+
+Bookings: 100 confirmed
+Seats:    booked 100
+Holds:    converted 100
+
+All checks passed

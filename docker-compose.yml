@@ -36,6 +36,7 @@ services:
     environment: &server-env
       NODE_ENV: production
       PORT: 4000
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
       MONGO_URI: mongodb://mongo:27017/ticketrush?replicaSet=rs0
       REDIS_URL: redis://redis:6379
       RATE_LIMIT_IP_ENABLED: ${RATE_LIMIT_IP_ENABLED:-true}

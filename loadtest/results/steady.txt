@@ -1,0 +1,57 @@
+# k6 summary: steady (native stack, WEB_CONCURRENCY=4, 2026-11-23)
+
+  █ THRESHOLDS 
+    http_req_duration{name:confirm}
+    ✓ 'p(95)<300' p(95)=203.97ms
+    http_req_duration{name:hold}
+    ✓ 'p(95)<300' p(95)=124.05ms
+    replay_mismatch
+    ✓ 'count==0' count=0
+    server_errors
+    ✓ 'count==0' count=0
+    unexpected_responses
+    ✓ 'count==0' count=0
+  █ TOTAL RESULTS 
+    checks_total.......: 996     37.409021/s
+    checks_succeeded...: 100.00% 996 out of 996
+    checks_failed......: 0.00%   0 out of 996
+    ✓ confirm is 201
+    CUSTOM
+    bookings.......................: 996    37.409021/s
+    gave_up........................: 4      0.150237/s
+    hold_conflicts.................: 227    8.525952/s
+    replay_mismatch................: 0      0/s
+    server_errors..................: 0      0/s
+    unexpected_responses...........: 0      0/s
+    HTTP
+    http_req_duration..............: avg=18.06ms  min=506.1µs med=8.81ms  p(90)=31.22ms  p(95)=60.27ms  p(99)=195.61ms max=271.89ms
+      { expected_response:true }...: avg=17.99ms  min=506.1µs med=8.64ms  p(90)=31ms     p(95)=60.99ms  p(99)=200.89ms max=271.89ms
+      { name:confirm }.............: avg=44.04ms  min=12.82ms med=21.44ms p(90)=102.56ms p(95)=203.97ms p(99)=248.58ms max=271.89ms
+      { name:hold }................: avg=24.83ms  min=5.42ms  med=11.54ms p(90)=55.6ms   p(95)=124.05ms p(99)=157.32ms max=195.89ms
+    http_req_failed................: 4.09%  227 out of 5544
+    http_reqs......................: 5544   208.228525/s
+    EXECUTION
+    iteration_duration.............: avg=127.16ms min=0s      med=40.3ms  p(90)=367.05ms p(95)=447.11ms p(99)=847.18ms max=1.38s   
+    iterations.....................: 1001   37.596817/s
+    vus............................: 19     min=0           max=20 
+    vus_max........................: 200    min=200         max=200
+    NETWORK
+    data_received..................: 146 MB 5.5 MB/s
+    data_sent......................: 1.7 MB 65 kB/s
+
+# loadtest/verify.js
+
+Database ticketrush, event 6b03eb7a0219fbe2740f354f
+
+PASS  No seat in two confirmed bookings (SRS 9 aggregation is empty): []
+PASS  Booked seats == seats in confirmed bookings: 996 booked, 996 in bookings
+PASS  Every booked seat belongs to its booking’s hold: 0 mismatched
+PASS  Successful charges == confirmed bookings (refunds counted apart): 996 charged, 996 bookings, 0 refunded
+PASS  No active hold expired more than 90 s ago: 0 stale
+PASS  Every held seat belongs to an active hold: 0 held, 0 stray
+
+Bookings: 996 confirmed
+Seats:    available 4, booked 996
+Holds:    converted 996
+
+All checks passed
