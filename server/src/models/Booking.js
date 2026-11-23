@@ -15,6 +15,7 @@ const bookingSchema = new Schema(
     ticketCode: { type: String, required: true },
     status: { type: String, enum: BOOKING_STATUSES, default: 'confirmed' },
     cancelledAt: { type: Date, default: null },
+    emailSentAt: { type: Date, default: null }, // set by the email job, so a re-run never emails twice
   },
   { timestamps: true },
 );

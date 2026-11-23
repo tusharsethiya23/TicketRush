@@ -246,7 +246,7 @@ Eight MongoDB collections hold every fact; Redis only holds short-lived copies, 
 | events | _id, organiserId → users, name, venue, city, startsAt, saleStartsAt, status, soldOutAt | index (city, startsAt); index (organiserId); status: draft, on_sale, sold_out, ended |
 | seats | _id, eventId → events, section, row, number, pricePaise, status, holdId | unique (eventId, section, row, number); index (eventId, status); index (holdId); status: available, held, booked |
 | holds | _id, userId → users, eventId → events, seatIds [ ], expiresAt, status | index (status, expiresAt) for the sweep; index (userId, eventId, status) for the hold cap; status: active, converted, expired, released |
-| bookings | _id, userId → users, holdId → holds, eventId, seatIds [ ], totalPaise, ticketCode, status, createdAt, cancelledAt | unique holdId; unique ticketCode; partial unique index on seatIds where status is confirmed (the last guard against double-booking); index (userId, createdAt); status: confirmed, cancelled |
+| bookings | _id, userId → users, holdId → holds, eventId, seatIds [ ], totalPaise, ticketCode, status, createdAt, cancelledAt, emailSentAt | unique holdId; unique ticketCode; partial unique index on seatIds where status is confirmed (the last guard against double-booking); index (userId, createdAt); status: confirmed, cancelled |
 | payments | _id, userId, holdId, amountPaise, status, createdAt | index (holdId); status: succeeded, failed, refunded (simulated) |
 | idempotencyKeys | userId, key, requestHash, status, responseStatus, responseBody, createdAt | unique (userId, key); TTL index deletes documents after 24 hours; status: processing or completed |
 
@@ -262,7 +262,7 @@ Redis may lose any of these keys without breaking correctness.
 | `seatmap:<eventId>` | Cached seat statuses; not cleared on writes, so it is at most 2 s stale | 2 s |
 | `rl:<route>:<userId or ip>` | Rate-limit counter | 1 min window |
 | `stats:failedHolds:<eventId>` | Failed hold attempts (best effort: lost on Redis restart) | 7 days |
-| `bull:*` | BullMQ queues: `emails`, `hold-expiry`, `sweep` | managed by BullMQ |
+| `bull:*` | BullMQ queues: `holds` (`release-hold` jobs, `jobId = holdId`) and `emails` (`booking-email` jobs) | managed by BullMQ; the prefix is `QUEUE_PREFIX`. The sweep is a timer in the worker, not a queue, so it keeps running while Redis is down |
 
 Bookings per minute and time to sell out are computed from MongoDB (`bookings.createdAt`, `events.soldOutAt`), so they survive a Redis restart.
 
@@ -391,5 +391,5 @@ Build in seven phases, each ending in something you can demo; phase 2 is the hea
 ## 11. Open questions
 
 - [ ] Where is the demo deployed (API, worker and Redis host)? The worker must run as its own process there.
-- [ ] Which email service sends confirmations: a test inbox (Ethereal or Mailtrap) or a real provider's free tier?
+- [ ] Which email service sends confirmations for the demo: a test inbox (Ethereal or Mailtrap) or a real provider's free tier? Any of them works through `SMTP_URL`; without it, emails are logged instead of sent.
 - [ ] Is a cap of 2 active holds per user per event right, or should it be 1?

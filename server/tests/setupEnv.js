@@ -8,4 +8,7 @@ process.env.RATE_LIMIT_IP_ENABLED = 'false';
 // Payments always succeed instantly; tests force a failure with jest.spyOn(payments, 'charge').
 process.env.PAYMENT_SUCCESS_RATE = '1';
 process.env.PAYMENT_DELAY_MS = '0';
+// Email retries back off from 10 ms, so the real-Redis worker test retries quickly.
+process.env.EMAIL_BACKOFF_BASE_MS = '10';
+process.env.QUEUE_PREFIX = 'trtest';
 // MONGO_URI is set by globalSetup.js.

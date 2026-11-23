@@ -4,6 +4,7 @@ const logger = require('../../lib/logger');
 const payments = require('../../lib/payments');
 const { runTransaction } = require('../../lib/transaction');
 const { invalidate, keys } = require('../../lib/cache');
+const { jobs } = require('../../jobs/queues');
 const { Booking, Event, Hold, IdempotencyKey, Payment, Seat } = require('../../models');
 
 /** A `processing` key older than this belongs to a request that crashed; it can be taken over. */
@@ -175,7 +176,9 @@ async function confirmClaimed(userId, holdId, claim) {
     throw err;
   }
 
-  // Step 6. The confirmation email and removing the release-hold job come with phase 5.
+  // Step 6. The jobs are not awaited and never throw (NFR-5).
+  jobs.enqueueBookingEmail(result.body.booking.id);
+  jobs.cancelHoldRelease(hold._id);
   await markSoldOutIfFull(hold.eventId);
   return result;
 }

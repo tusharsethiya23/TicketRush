@@ -3,7 +3,7 @@
 Read this file first in every new session. Update it at the end of every step.
 
 - **Spec:** [docs/SRS.md](SRS.md) (SRS v2) is the source of truth. The live doc at https://claude.ai/artifact/XDy24h8RPCbb2onVi1qmW3 has the same content, minus the small additions made during the build.
-- **Current phase:** Phases 1 to 4 are done. The Docker and real-Redis check is still pending, because Docker Desktop wasn't running. Next up is Phase 5 (BullMQ worker, emails, expiry and sweep).
+- **Current phase:** Phases 1 to 5 are done. The Docker check is still pending, because Docker Desktop wasn't running. Real Redis is now checked through a local Memurai. Next up is Phase 6 (React frontend).
 - **Last updated:** 2026-11-23
 
 ## Workflow rules
@@ -19,14 +19,17 @@ Read this file first in every new session. Update it at the end of every step.
 
 ```bash
 # Tests (in-memory MongoDB replica set; no Docker needed)
+# tests/worker.redis.test.js also needs a real Redis at REDIS_TEST_URL
+# (default redis://127.0.0.1:6379/15) and skips itself when none answers
 cd server && npm install && npm test
 
-# Whole stack: MongoDB replica set, Redis and the API on http://localhost:4000
+# Whole stack: MongoDB replica set, Redis, the API on http://localhost:4000 and the worker
 docker compose up -d --build
 
 # API on the host against the Docker MongoDB
 cp server/.env.example server/.env   # then set JWT_ACCESS_SECRET
 cd server && npm run dev
+cd server && npm run dev:worker      # in a second terminal: jobs and the sweep
 
 # Admin account (needs ADMIN_EMAIL and ADMIN_PASSWORD in env or .env)
 cd server && npm run seed:admin
@@ -36,6 +39,7 @@ cd server && npm run seed:admin
 
 | Date | Step | Result |
 | --- | --- | --- |
+| 2026-11-23 | Phase 5: Worker and jobs | BullMQ release-hold and email jobs, QR-code email, the sweep, a worker process in Compose; 136 tests, including real BullMQ on local Redis; 91% line coverage; an end-to-end smoke test with real API and worker processes passed |
 | 2026-11-23 | Phase 4: Booking | Confirm with idempotency and simulated payment, refund on paid-but-expired, sold out, my bookings, cancel; 114 tests, 94% line coverage; the parallel tests pass 5 runs out of 5 |
 | 2026-11-23 | Phase 3: Redis | Event and seat-map cache, rate limits, failed-holds counter, Redis in `/health`, fallback when Redis is down; 95 tests, 92% line coverage |
 | 2026-11-23 | Phase 2: Events and safe holds | Event create, edit, publish, list and seat map; holds and early release; bounded-retry transactions. The race tests pass 6 runs out of 6; 83 tests in all, with 94% line coverage |
@@ -151,33 +155,78 @@ cd server && npm run seed:admin
   - my bookings
   - SRS 9 cancel then rebook, a second sell-out keeping the first `soldOutAt`, the 24-hour window, cancelling twice
 
+### Phase 5 details
+
+- `src/jobs/queues.js` is the producer side, used by the API.
+  - It has two BullMQ queues: `holds` (`release-hold`, `jobId = holdId`) and `emails` (`booking-email`, `jobId = booking-email-<id>`).
+  - `jobs.scheduleHoldRelease`, `jobs.cancelHoldRelease` and `jobs.enqueueBookingEmail` are never awaited by callers and never throw. They give up after 1 s (NFR-5).
+  - The release job is due at `expiresAt` plus 500 ms, because the release requires `expiresAt <= now`.
+  - Email jobs: `attempts: 4`, a custom backoff of 1 s, 4 s and 16 s, kept in the failed set.
+  - `setQueueFactory` swaps in fake queues (most tests) or real BullMQ queues on a test Redis.
+- `src/jobs/processors.js`:
+  - `processReleaseHold` calls `releaseHold(id, { reason: 'expired' })`, a no-op for converted or released holds.
+  - `sweepExpiredHolds` releases active holds past `expiresAt`, in batches of `SWEEP_BATCH_SIZE`, through the `(status, expiresAt)` index. It also reopens `sold_out` events that have a free seat, which fixes the Phase 4 known limitation.
+  - `processBookingEmail` sends the ticket details with an inline QR PNG of `ticketCode`, escapes HTML, and sets `bookings.emailSentAt` so a re-run never sends twice. It skips cancelled or missing bookings, and throws on a send failure so BullMQ retries.
+- `src/jobs/workers.js` has `createWorkers(connection)` (holds concurrency 20, emails 5) and `startSweep()`: a `setInterval` that never overlaps and runs at once on start.
+- `src/worker.js` is the process (`npm run worker`, `npm run dev:worker`). It is also the `worker` service in Compose, which shares the API's environment through a YAML anchor.
+- `src/lib/mailer.js` uses nodemailer over `SMTP_URL` (any provider). When it is not set, the email is rendered and logged instead.
+- API hooks:
+  - hold created: schedule release
+  - early release: remove job
+  - confirm: queue email and remove the release job
+- New config: `QUEUE_PREFIX`, `SWEEP_INTERVAL_SECONDS`, `SWEEP_BATCH_SIZE`, `EMAIL_BACKOFF_BASE_MS`, `SMTP_URL`, `MAIL_FROM`. New dependencies: `bullmq` 6, `nodemailer` 10, `qrcode`.
+- Tests:
+  - `jobs.test.js` (17) uses a fake queue:
+    - jobs scheduled and removed
+    - a broken or hanging queue never fails or slows a request
+    - the release job and the sweep, including the SRS 9 expiry test
+    - SRS 9 confirm vs expiry race, 12 rounds with fast, slow and near-deadline payments: always exactly one outcome
+    - the email content, the QR code, HTML escaping, sending once, the retry on failure, the backoff values
+  - `worker.redis.test.js` (5) runs on a real Redis (local Memurai, database 15) and skips when none is found:
+    - the rate limiter's `MULTI` on real Redis
+    - delayed job → worker frees the seat
+    - confirm removes the job and the worker emails
+    - email retry, then success
+    - email failing 4 times ends in the failed set
+- An end-to-end smoke test ran the real `server.js` and `worker.js` processes against a temporary MongoDB and Redis database 14, with a 3 s TTL:
+  - the job freed a seat at 3.5 s
+  - confirm gave 201, the job was removed and the email was logged
+  - with the worker stopped, the seat stayed held, then was freed when the worker restarted
+  - a hold whose job was deleted was freed by the sweep alone
+
 ## Next steps
 
-- [ ] **Check Docker and real Redis (left over from Phases 1 and 3):**
+- [ ] **Check Docker (left over from Phases 1, 3 and 5):** real Redis behaviour is now checked on Memurai; only the Docker stack is left.
     - start Docker Desktop
     - run `docker compose up -d --build --wait`
     - `curl localhost:4000/health` should show mongo and redis `ok`
-    - check that rate limiting works on real Redis (`MULTI` with `SET NX PX` has only been tested on ioredis-mock)
-    - `docker compose stop redis` should leave the API serving with `/health` at 503
+    - `docker compose logs worker` should show "Worker started"
+    - `docker compose stop redis` should leave the API serving with `/health` at 503, and the worker should log that it lost Redis
+    - `docker compose stop worker` should exit cleanly (SIGTERM). This could not be tested on Windows, where Node cannot receive SIGTERM
 
-### Phase 5: Worker and jobs (FR-9, FR-15, FR-16, NFR-6)
+### Phase 6: Frontend (FR-20 onwards, SRS 4.2)
 
-- [ ] BullMQ queue and a separate worker process (`src/worker.js`), sharing models and config with the API
-- [ ] `release-hold` delayed job, with `jobId = holdId` and a delay equal to the TTL, added after a hold commits; the job calls `releaseHold(holdId, { reason: 'expired' })`
-- [ ] Remove the `release-hold` job after a confirm or an early release (best effort; the release is a no-op on a converted hold anyway)
-- [ ] Sweep every minute: find active holds with `expiresAt <= now` through the `(status, expiresAt)` index and release each one. This also covers the time Redis is down
-- [ ] Confirmation email job after a booking, with a QR code of `ticketCode`. Retries 3 times with exponential backoff (1 s, 4 s, 16 s), then stays in the failed set (FR-16). Email service still to be decided (open question)
-- [ ] Enqueue failures must never fail a hold or a confirm (NFR-5); the sweep is the safety net
-- [ ] Add the worker to Docker Compose
-- [ ] Tests:
-    - expiry with `HOLD_TTL_SECONDS=5` and the sweep triggered directly: the seat is available again
-    - confirm vs expiry race with `PAYMENT_DELAY_MS` near the TTL: either booked or 410 with the seats available and a refund, never both, never neither
-    - email job retries and backoff
-- [ ] **Done when:** the expiry and confirm-vs-expiry tests pass
+- [ ] React app with Vite in `client/`, talking only to `/api/v1`
+- [ ] Auth:
+    - the access token is kept in memory
+    - silent refresh through the `rt` cookie on load and on a 401
+    - `GET /me`
+    - consider a short grace window for two tabs refreshing at once (known limitation)
+- [ ] Pages:
+    - event list (city and date filters)
+    - event page with the seat map (available, held, booked), polling the cached seat map
+    - hold with a countdown to `expiresAt`
+    - checkout: one `Idempotency-Key` per hold, reused on Pay retry after a 402
+    - my bookings with ticket codes and cancel
+- [ ] Organiser pages: create and edit a draft with a seat-map builder, publish, sales (needs `GET /organiser/events/:id/sales`, FR-31)
+- [ ] Admin: `GET /admin/stats` (FR-18: bookings per minute, `stats:failedHolds:*`, time to sell out from `soldOutAt`), block and unblock (FR-32)
+- [ ] Swagger at `/docs`
+- [ ] Add the client to Compose
+- [ ] Tests with Vitest and React Testing Library: countdown, seat-map states, the same key reused on Pay retry
+- [ ] **Done when:** the frontend tests pass and a full booking works in the browser against Compose
 
 ### Later phases (SRS section 10)
 
-- [ ] Phase 6: React frontend, admin and organiser pages, Swagger, worker and client in Compose
 - [ ] Phase 7: k6 load test, Redis restart test, deploy, README results
 
 ## Decisions made
@@ -218,6 +267,14 @@ cd server && npm run seed:admin
   - The sold-out check runs after commit, outside the booking transaction. Inside it, two parallel last-seat bookings would each miss the other's seats (write skew), and a shared event-document counter would make every confirm conflict under load.
   - Cancelling an already cancelled booking returns 200 with the booking, so retries are safe. No new error code was needed.
   - `GET /me/bookings` works for any signed-in role; organisers and admins just get an empty list.
+- **Phase 5**
+  - BullMQ 6 (current), with ioredis 5 shared with the API.
+  - The sweep is a `setInterval` in the worker, not a BullMQ repeatable job, so it keeps releasing holds while Redis is down (SRS 9 Redis restart test). Several workers sweeping at once is harmless, because releases are conditional.
+  - Enqueue calls are fire-and-forget with a 1 s cap. A lost release job costs at most one sweep interval. A lost email job is the only real loss while Redis is down.
+  - The release job is scheduled 500 ms after `expiresAt`, so it never runs a moment too early and does nothing.
+  - Email goes through any SMTP service set by `SMTP_URL`. Without it, emails are logged, so local runs and the demo need no account. This narrows the email open question to which service the demo uses.
+  - `bookings.emailSentAt` makes the email job safe to re-run.
+  - A real-Redis test file runs when Redis answers at `REDIS_TEST_URL`. It only touches `trtest:*` and its own `rl:*` keys, and never runs FLUSHALL. The ioredis-mock restore is in a `finally`, because `clearTestDb` flushes whatever `getRedis()` returns.
 - **Unchanged SRS decisions**
   - A failed payment (402) is not stored under the idempotency key, so the same key can retry.
   - The seat-map cache has a 2 s TTL and is not cleared on writes.
@@ -225,12 +282,14 @@ cd server && npm run seed:admin
 
 ## Known limitations
 
-- A cancel can commit between the sold-out check and the sold-out update of a confirm. The event then shows `sold_out` with one seat available. This is very rare and only cosmetic, because holds check the seats, not the event status, and `sold_out` events still accept holds. The phase 5 sweep could re-check it.
+- A cancel can commit between the sold-out check and the sold-out update of a confirm. The event then shows `sold_out` with one seat available. This is rare and only cosmetic, because holds check the seats, not the event status. Since phase 5, the sweep puts such an event back on sale within a minute.
+- While Redis is down, booking emails are not queued and are lost. Holds still expire through the sweep. A later fix could have the sweep queue emails for confirmed bookings with no `emailSentAt`.
+- On Windows, `npm run worker` cannot shut down gracefully on Ctrl+C or a kill. That is harmless, because jobs and releases are safe to re-run; Docker and Linux get the SIGTERM handler.
 
 - Two browser tabs refreshing at the same moment share one refresh token. The loser triggers reuse detection, which logs the user out. A short grace window can fix this in phase 6 if it shows up in the frontend.
 
 ## Open questions
 
 - [ ] Where is the demo deployed (API, worker and Redis host)?
-- [ ] Which email service: Ethereal, Mailtrap or a real provider?
+- [ ] Which email service for the demo: Ethereal, Mailtrap or a real provider? Any of them works by setting `SMTP_URL`; without it, emails are logged.
 - [ ] Hold cap of 2 per user per event, or 1?

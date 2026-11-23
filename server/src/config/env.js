@@ -33,6 +33,17 @@ const schema = z.object({
 
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
+  // Background jobs (phase 5). BullMQ keys start with QUEUE_PREFIX; tests use their own.
+  QUEUE_PREFIX: z.string().regex(/^[a-z0-9_-]+$/i).default('bull'),
+  SWEEP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
+  SWEEP_BATCH_SIZE: z.coerce.number().int().positive().default(500),
+  EMAIL_BACKOFF_BASE_MS: z.coerce.number().int().positive().default(1000), // retries after 1 s, 4 s, 16 s (FR-16)
+
+  // Email (FR-15). Without SMTP_URL, emails are logged instead of sent.
+  // Any SMTP service works: Ethereal, Mailtrap or a real provider, e.g. smtps://user:pass@smtp.example.com
+  SMTP_URL: z.string().optional(),
+  MAIL_FROM: z.string().default('TicketRush <no-reply@ticketrush.local>'),
+
   // Rate limits (FR-17, SRS 8.3). Requests per window.
   RATE_LIMIT_ENABLED: bool.default(true),
   RATE_LIMIT_IP_ENABLED: bool.default(true), // false for k6 load tests, which send from one IP

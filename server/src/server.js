@@ -3,6 +3,7 @@ const logger = require('./lib/logger');
 const { connectMongo, disconnectMongo } = require('./db/mongo');
 const { getRedis, closeRedis } = require('./lib/redis');
 const { createApp } = require('./app');
+const { closeQueues } = require('./jobs/queues');
 
 async function main() {
   await connectMongo();
@@ -18,7 +19,7 @@ async function main() {
   const shutdown = (signal) => {
     logger.info({ signal }, 'Shutting down');
     server.close(async () => {
-      await Promise.allSettled([disconnectMongo(), closeRedis()]);
+      await Promise.allSettled([disconnectMongo(), closeRedis(), closeQueues()]);
       process.exit(0);
     });
     setTimeout(() => process.exit(1), 10_000).unref();

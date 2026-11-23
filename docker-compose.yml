@@ -33,7 +33,7 @@ services:
     build: ./server
     ports:
       - "4000:4000"
-    environment:
+    environment: &server-env
       NODE_ENV: production
       PORT: 4000
       MONGO_URI: mongodb://mongo:27017/ticketrush?replicaSet=rs0
@@ -41,6 +41,9 @@ services:
       RATE_LIMIT_IP_ENABLED: ${RATE_LIMIT_IP_ENABLED:-true}
       PAYMENT_SUCCESS_RATE: ${PAYMENT_SUCCESS_RATE:-0.9}
       PAYMENT_DELAY_MS: ${PAYMENT_DELAY_MS:-200}
+      HOLD_TTL_SECONDS: ${HOLD_TTL_SECONDS:-300}
+      SWEEP_INTERVAL_SECONDS: ${SWEEP_INTERVAL_SECONDS:-60}
+      SMTP_URL: ${SMTP_URL:-}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-local-dev-only-secret-do-not-use-in-production}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
     depends_on:
@@ -53,6 +56,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # Release-hold and email jobs, plus the every-minute sweep (phase 5). Same image as the API.
+  worker:
+    build: ./server
+    command: ["node", "src/worker.js"]
+    environment: *server-env
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   mongo-data:

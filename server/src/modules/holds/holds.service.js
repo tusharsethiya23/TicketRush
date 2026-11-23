@@ -6,6 +6,7 @@ const { Event, Seat, Hold } = require('../../models');
 const { getRedis } = require('../../lib/redis');
 const { keys, TTL } = require('../../lib/cache');
 const logger = require('../../lib/logger');
+const { jobs } = require('../../jobs/queues');
 
 const seatTaken = () => new AppError(409, 'SEAT_TAKEN', 'One or more seats are no longer available');
 
@@ -62,6 +63,8 @@ async function createHold({ userId, eventId, seatIds }) {
       const [created] = await Hold.create([{ _id: holdId, userId, eventId, seatIds, expiresAt }], { session });
       return created;
     });
+    // SRS 6.1 step 5. Not awaited and never throws; the sweep covers a lost job.
+    jobs.scheduleHoldRelease(hold._id, hold.expiresAt);
     return toPublicHold(hold);
   } catch (err) {
     if (err instanceof TransactionConflictError) {
@@ -97,7 +100,7 @@ async function explainShortfall(eventId, seatIds) {
 
 /**
  * SRS 6.3: the one way a hold's seats go back to available. Used for an early release
- * (FR-10) now, and by the expiry job and sweep in phase 5. The hold changes only while
+ * (FR-10), and by the release-hold job and the sweep (src/jobs/processors.js). The hold changes only while
  * it is still active, so this can never undo a confirmed booking.
  *
  * @returns true if this call released the hold, false if it was no longer active.
@@ -123,7 +126,10 @@ async function releaseHold(holdId, { reason, userId } = {}) {
 
 /** FR-10: DELETE /holds/:id */
 async function releaseOwnHold(userId, holdId) {
-  if (await releaseHold(holdId, { reason: 'released', userId })) return;
+  if (await releaseHold(holdId, { reason: 'released', userId })) {
+    jobs.cancelHoldRelease(holdId);
+    return;
+  }
 
   const hold = await Hold.findOne({ _id: holdId, userId }).select('status').lean();
   if (!hold) throw new AppError(404, 'NOT_FOUND', 'Hold not found');
