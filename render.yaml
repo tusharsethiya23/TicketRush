@@ -1,0 +1,42 @@
+# Render Blueprint: one free web service (API + worker + built React app) and a free Redis.
+# MongoDB is external (MongoDB Atlas free tier); Render asks for MONGO_URI on first deploy.
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo.
+services:
+  - type: web
+    name: ticketrush
+    runtime: node
+    plan: free
+    buildCommand: cd client && npm ci --include=dev && npm run build && cd ../server && npm ci --omit=dev
+    startCommand: cd server && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false # paste the Atlas connection string when Render asks
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: ticketrush-redis
+          property: connectionString
+      # The free plan has no separate background worker, so the API runs the jobs.
+      - key: RUN_WORKER_IN_API
+        value: "true"
+      - key: CLIENT_DIST
+        value: ../client/dist
+      # Render's load balancer is one proxy hop; needed for correct per-IP rate limits.
+      - key: TRUST_PROXY
+        value: "1"
+      # The free instance has a small CPU share; cost 10 keeps sign-in under a second.
+      - key: BCRYPT_ROUNDS
+        value: "10"
+
+  - type: keyvalue
+    name: ticketrush-redis
+    plan: free
+    maxmemoryPolicy: noeviction # BullMQ must never have its job keys evicted
+    ipAllowList: [] # reachable only from Render services in the same region

@@ -6,12 +6,11 @@ const { getRedis, closeRedis } = require('./lib/redis');
 const { createWorkers, startSweep } = require('./jobs/workers');
 
 /**
- * The background worker process (SRS 3): release-hold and email jobs from BullMQ,
- * plus the sweep. Run it next to the API with `npm run worker`.
+ * Starts the background jobs (SRS 3): release-hold and email jobs from BullMQ, plus the
+ * sweep. Expects MongoDB to be connected. Returns a function that stops them.
+ * Used by the worker process below, and by the API when RUN_WORKER_IN_API=true.
  */
-async function main() {
-  await connectMongo();
-  logger.info('Worker connected to MongoDB');
+function startWorker() {
   getRedis(); // for cache invalidation when the sweep reopens an event
 
   const connection = new Redis(config.REDIS_URL, {
@@ -32,12 +31,23 @@ async function main() {
   const stopSweep = startSweep();
   logger.info({ sweepEverySeconds: config.SWEEP_INTERVAL_SECONDS }, 'Worker started');
 
-  const shutdown = async (signal) => {
-    logger.info({ signal }, 'Worker shutting down');
-    setTimeout(() => process.exit(1), 15_000).unref();
+  return async function stopWorker() {
     await stopSweep();
     await Promise.allSettled(workers.map((w) => w.close()));
     connection.disconnect();
+  };
+}
+
+/** The standalone worker process: `npm run worker`, next to the API. */
+async function main() {
+  await connectMongo();
+  logger.info('Worker connected to MongoDB');
+  const stopWorker = startWorker();
+
+  const shutdown = async (signal) => {
+    logger.info({ signal }, 'Worker shutting down');
+    setTimeout(() => process.exit(1), 15_000).unref();
+    await stopWorker();
     await Promise.allSettled([disconnectMongo(), closeRedis()]);
     process.exit(0);
   };
@@ -45,7 +55,11 @@ async function main() {
   process.on('SIGINT', shutdown);
 }
 
-main().catch((err) => {
-  logger.fatal({ err }, 'Worker failed to start');
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    logger.fatal({ err }, 'Worker failed to start');
+    process.exit(1);
+  });
+}
+
+module.exports = { startWorker };

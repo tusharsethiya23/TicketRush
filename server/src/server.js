@@ -14,6 +14,10 @@ async function serve({ syncIndexes }) {
   // Not awaited: the API starts and stays correct without Redis (NFR-5); it reconnects in the background.
   getRedis();
 
+  // One process runs the jobs even when WEB_CONCURRENCY forks several.
+  const runWorker = config.RUN_WORKER_IN_API && (!cluster.isWorker || cluster.worker.id === 1);
+  const stopWorker = runWorker ? require('./worker').startWorker() : async () => {};
+
   // Node's default backlog (511) refuses connections when a flash sale opens and 1,000
   // fans connect in the same instant; the OS still caps this at its own limit (somaxconn).
   const server = createApp().listen({ port: config.PORT, backlog: 4096 }, () => {
@@ -23,6 +27,7 @@ async function serve({ syncIndexes }) {
   const shutdown = (signal) => {
     logger.info({ signal }, 'Shutting down');
     server.close(async () => {
+      await stopWorker().catch(() => {});
       await Promise.allSettled([disconnectMongo(), closeRedis(), closeQueues()]);
       process.exit(0);
     });

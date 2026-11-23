@@ -3,7 +3,7 @@
 Read this file first in every new session. Update it at the end of every step.
 
 - **Spec:** [docs/SRS.md](SRS.md) (SRS v2) is the source of truth. The live doc at https://claude.ai/artifact/XDy24h8RPCbb2onVi1qmW3 has the same content, minus the small additions made during the build.
-- **Current phase:** Phases 1 to 7 are built. The load test, the Redis restart test and the README are done. Still open: deploy (needs a host decision), re-running the load test on Docker, and a click-through in a real browser.
+- **Current phase:** Phases 1 to 7 are built. The load test, the Redis restart test and the README are done. Deploy is prepared for Render's free tier (`render.yaml`). Still open: running the deploy, re-running the load test on Docker, and a click-through in a real browser.
 - **Last updated:** 2026-11-23
 
 ## Workflow rules
@@ -43,6 +43,7 @@ cd server && npm run seed:admin
 
 | Date | Step | Result |
 | --- | --- | --- |
+| 2026-11-23 | Deploy prep (free tier) | `render.yaml` Blueprint: one Render web service plus a free Render Key Value (Redis), with MongoDB Atlas. The API can run the jobs (`RUN_WORKER_IN_API`) and serve the built client (`CLIENT_DIST`, SPA fallback that never shadows `/api`, `/docs`, `/health`). 155 server tests pass; single-service mode checked locally on port 4100. Not yet deployed. |
 | 2026-11-23 | Phase 7: Prove it | k6 flash sale (1,000 fans and 100 seats: 0 double-bookings, 0 server errors), sustained load (p95 hold 124 ms, confirm 204 ms), Redis killed mid-sale (all checks pass), `WEB_CONCURRENCY` cluster mode, README with results; the burst p95 misses 300 ms on this laptop (see Phase 7 details) |
 | 2026-11-23 | Phase 6b: React frontend | Vite and React 19 app with every SRS 4.2 page, the client in Compose behind nginx; 36 frontend tests; an end-to-end smoke test through the Vite proxy (19 checks) passed |
 | 2026-11-23 | Phase 6a: Organiser, admin, Swagger | Organiser events, edit view and sales; admin stats, user search, block and unblock; Swagger at `/docs`, with a test that every route is documented; 153 tests, 93% line coverage |
@@ -334,7 +335,7 @@ cd server && npm run seed:admin
 
 ### Still open after Phase 7
 
-- [ ] **Deploy** (open question: where). It needs a MongoDB replica set (for example Atlas), a Redis, the API, the worker as its own process, and the client behind one origin (nginx, or a host that proxies `/api`). Do not publish the API port directly, because of `TRUST_PROXY`.
+- [ ] **Deploy** on Render's free tier with `render.yaml` and MongoDB Atlas M0 (prepared; the user runs it). Free-tier trade-offs: the service sleeps after 15 minutes idle (about a minute to wake), the jobs share the API's process, and Key Value data is not persisted (BullMQ jobs can be lost; the sweep covers holds, emails can be lost). For real traffic, move the worker to its own service (`npm run worker`) and set `RUN_WORKER_IN_API=false`.
 - [ ] **Re-run the load test on Docker** once Docker Desktop runs, and add those numbers to the README:
     - `docker compose -f docker-compose.yml -f loadtest/docker-compose.loadtest.yml up -d --build --wait`
     - `k6 run loadtest/flash-sale.js`

@@ -84,6 +84,8 @@ cd client && npm install && npm run dev        # app on :5173, proxies /api to :
 
 Emails are written to the log until you set `SMTP_URL` (any provider: Ethereal, Mailtrap, a real one).
 
+**Deploy for free** (Render + MongoDB Atlas): [render.yaml](render.yaml) creates one web service that runs the API and the jobs (`RUN_WORKER_IN_API=true`) and serves the built app (`CLIENT_DIST`), plus a free Redis. In Render choose New → Blueprint, pick the repo, and paste an Atlas connection string as `MONGO_URI`. The free instance sleeps after 15 minutes idle; on wake, the sweep releases any holds that expired meanwhile.
+
 ## Tests
 
 ```bash

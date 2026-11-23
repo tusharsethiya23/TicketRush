@@ -36,6 +36,11 @@ const schema = z.object({
 
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
+  // Single-service hosting (free tiers): run the worker inside the API process, and serve
+  // the built React app (client/dist) from the API so both share one origin.
+  RUN_WORKER_IN_API: bool.default(false),
+  CLIENT_DIST: z.string().optional(),
+
   // Background jobs (phase 5). BullMQ keys start with QUEUE_PREFIX; tests use their own.
   QUEUE_PREFIX: z.string().regex(/^[a-z0-9_-]+$/i).default('bull'),
   SWEEP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),

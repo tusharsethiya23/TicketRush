@@ -1,3 +1,4 @@
+const path = require('node:path');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -49,6 +50,16 @@ function createApp() {
   app.use('/api/v1/bookings', bookingsRoutes);
   app.use('/api/v1/organiser', organiserRoutes);
   app.use('/api/v1/admin', adminRoutes);
+
+  // The built React app on the same origin, so the refresh cookie and /api calls just work.
+  // Unknown non-API paths get index.html so client-side routes survive a reload.
+  if (config.CLIENT_DIST) {
+    const dist = path.resolve(config.CLIENT_DIST);
+    app.use(express.static(dist, { index: false, maxAge: '1h' }));
+    app.get(/^(?!\/(api|docs|health)(\/|$)).*/, (req, res) => {
+      res.sendFile(path.join(dist, 'index.html'), { headers: { 'Cache-Control': 'no-cache' } });
+    });
+  }
 
   app.use(notFound);
   app.use(errorHandler);
