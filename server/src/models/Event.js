@@ -16,8 +16,11 @@ const eventSchema = new Schema(
   { timestamps: true },
 );
 
-eventSchema.index({ city: 1, startsAt: 1 });
+// Case-insensitive collation so "mumbai" finds "Mumbai"; queries must use CITY_COLLATION to hit it.
+const CITY_COLLATION = { locale: 'en', strength: 2 };
+eventSchema.index({ city: 1, startsAt: 1 }, { collation: CITY_COLLATION });
 eventSchema.index({ organiserId: 1 });
 
 module.exports = model('Event', eventSchema);
 module.exports.EVENT_STATUSES = EVENT_STATUSES;
+module.exports.CITY_COLLATION = CITY_COLLATION;

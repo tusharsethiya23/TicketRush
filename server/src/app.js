@@ -9,6 +9,8 @@ const { notFound, errorHandler } = require('./middleware/errorHandler');
 const healthRoutes = require('./modules/health/health.routes');
 const authRoutes = require('./modules/auth/auth.routes');
 const meRoutes = require('./modules/me/me.routes');
+const eventsRoutes = require('./modules/events/events.routes');
+const holdsRoutes = require('./modules/holds/holds.routes');
 
 function createApp() {
   const app = express();
@@ -24,6 +26,8 @@ function createApp() {
   app.use('/health', healthRoutes);
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/me', meRoutes);
+  app.use('/api/v1/events', eventsRoutes);
+  app.use('/api/v1/holds', holdsRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

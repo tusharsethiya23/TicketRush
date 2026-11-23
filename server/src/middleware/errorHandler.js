@@ -1,5 +1,6 @@
 const { ZodError } = require('zod');
 const AppError = require('../lib/AppError');
+const { TransactionConflictError } = require('../lib/transaction');
 
 function notFound(req, res, next) {
   next(new AppError(404, 'NOT_FOUND', `Route ${req.method} ${req.path} not found`));
@@ -28,6 +29,10 @@ function errorHandler(err, req, res, next) {
     status = 413;
     code = 'PAYLOAD_TOO_LARGE';
     message = 'Request body is too large';
+  } else if (err instanceof TransactionConflictError) {
+    status = 409;
+    code = 'CONFLICT';
+    message = 'Too many concurrent changes, please try again';
   } else if (err.code === 11000) {
     status = 409;
     code = 'CONFLICT';

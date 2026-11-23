@@ -223,7 +223,7 @@ The delayed job, the every-minute sweep and `DELETE /holds/:id` all run the same
 
 1. `holds.updateOne({ _id, status: 'active' }, { $set: { status: 'expired' } })`, or `'released'` for an early release. Expiry and sweep also require `expiresAt <= now`.
 2. If nothing matched, stop. The hold was already converted or released, so its seats must not be touched.
-3. `seats.updateMany({ holdId, status: 'held' }, { $set: { status: 'available' }, $unset: { holdId: '' } })`.
+3. `seats.updateMany({ holdId, status: 'held' }, { $set: { status: 'available', holdId: null } })`.
 
 The sweep finds candidates with the `(status, expiresAt)` index. Running it twice on the same hold is harmless.
 
@@ -302,7 +302,7 @@ Errors use one shape: `{ "error": { "code": "SEAT_TAKEN", "message": "...", "req
 
 | Status | Code | When |
 | --- | --- | --- |
-| 400 | VALIDATION_FAILED | Body, query or params fail the zod schema |
+| 400 | VALIDATION_FAILED | Body, query or params fail the zod schema, or a held seat does not belong to the event |
 | 401 | UNAUTHENTICATED | Missing, expired or invalid token |
 | 401 | INVALID_CREDENTIALS | Wrong email or password (the same response for both) |
 | 402 | PAYMENT_FAILED | Simulated payment declined; retry is allowed |
@@ -314,6 +314,7 @@ Errors use one shape: `{ "error": { "code": "SEAT_TAKEN", "message": "...", "req
 | 409 | REQUEST_IN_PROGRESS | Same idempotency key is still being processed |
 | 409 | CANCEL_WINDOW_CLOSED | Event starts within 24 hours |
 | 409 | EVENT_NOT_EDITABLE | Edit or publish of an event that is not a draft |
+| 409 | CONFLICT | A transaction still hit write conflicts after 3 retries (outside holds, where it is SEAT_TAKEN) |
 | 410 | HOLD_EXPIRED | Hold expired, released or already converted |
 | 413 | PAYLOAD_TOO_LARGE | Request body over 100 KB |
 | 422 | IDEMPOTENCY_KEY_REUSED | Same key sent with a different body |

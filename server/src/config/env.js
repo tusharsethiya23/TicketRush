@@ -19,6 +19,9 @@ const schema = z.object({
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
   BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(15).default(12),
 
+  HOLD_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  MAX_ACTIVE_HOLDS_PER_EVENT: z.coerce.number().int().positive().default(2),
+
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   COOKIE_SECURE: bool.optional(),
 });
