@@ -278,6 +278,7 @@ All routes start with `/api/v1` (except `/health` and `/docs`), take and return 
 | POST | /auth/login | Guest | Returns an access token; sets the refresh cookie | FR-2 |
 | POST | /auth/refresh | Guest with refresh cookie | Rotates the refresh token and returns a new access token | FR-2, FR-26 |
 | POST | /auth/logout | User | Revokes the refresh token and clears the cookie | FR-26 |
+| GET | /me | User | The signed-in account (used by the React app after a silent refresh) | FR-20 |
 | POST | /events | Organiser | Create a draft event with its seat map | FR-4 |
 | PATCH | /events/:id | Organiser (owner) | Edit a draft event and its seat map | FR-4 |
 | POST | /events/:id/publish | Organiser (owner) | Set a draft event to on_sale | FR-27 |
@@ -303,15 +304,18 @@ Errors use one shape: `{ "error": { "code": "SEAT_TAKEN", "message": "...", "req
 | --- | --- | --- |
 | 400 | VALIDATION_FAILED | Body, query or params fail the zod schema |
 | 401 | UNAUTHENTICATED | Missing, expired or invalid token |
+| 401 | INVALID_CREDENTIALS | Wrong email or password (the same response for both) |
 | 402 | PAYMENT_FAILED | Simulated payment declined; retry is allowed |
 | 403 | FORBIDDEN | Wrong role, or the account is blocked |
 | 403 | SALE_NOT_STARTED | Hold before `saleStartsAt` or on an event not on sale |
 | 404 | NOT_FOUND | Missing resource, or one owned by someone else |
+| 409 | EMAIL_TAKEN | Sign-up with an email that already has an account |
 | 409 | SEAT_TAKEN | At least one requested seat is not available |
 | 409 | REQUEST_IN_PROGRESS | Same idempotency key is still being processed |
 | 409 | CANCEL_WINDOW_CLOSED | Event starts within 24 hours |
 | 409 | EVENT_NOT_EDITABLE | Edit or publish of an event that is not a draft |
 | 410 | HOLD_EXPIRED | Hold expired, released or already converted |
+| 413 | PAYLOAD_TOO_LARGE | Request body over 100 KB |
 | 422 | IDEMPOTENCY_KEY_REUSED | Same key sent with a different body |
 | 428 | IDEMPOTENCY_KEY_REQUIRED | Confirm sent without the header |
 | 429 | RATE_LIMITED | Too many requests |
