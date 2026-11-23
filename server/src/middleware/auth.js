@@ -2,11 +2,15 @@ const AppError = require('../lib/AppError');
 const asyncHandler = require('../lib/asyncHandler');
 const { verifyAccessToken } = require('../lib/tokens');
 const User = require('../models/User');
+const { limiters } = require('./rateLimit');
+
+const userLimiter = limiters.allByUser();
 
 /**
  * Requires a valid Bearer access token and an active account (FR-3).
  * The account is re-read on every request so a block takes effect at once,
  * not only when the 15-minute access token expires.
+ * Every signed-in request also counts toward the per-user limit (FR-17).
  */
 const authenticate = asyncHandler(async (req, res, next) => {
   const [scheme, token] = (req.headers.authorization || '').split(' ');
@@ -26,7 +30,7 @@ const authenticate = asyncHandler(async (req, res, next) => {
   if (user.status === 'blocked') throw new AppError(403, 'FORBIDDEN', 'Account is blocked');
 
   req.user = { id: String(user._id), email: user.email, role: user.role };
-  next();
+  await userLimiter(req, res, next);
 });
 
 /** Allows the request only for the given roles. Use after authenticate. */

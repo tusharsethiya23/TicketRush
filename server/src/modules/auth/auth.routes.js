@@ -2,6 +2,7 @@ const { Router } = require('express');
 const config = require('../../config/env');
 const asyncHandler = require('../../lib/asyncHandler');
 const validate = require('../../middleware/validate');
+const { limiters } = require('../../middleware/rateLimit');
 const { registerSchema, loginSchema } = require('./auth.schemas');
 const authService = require('./auth.service');
 
@@ -18,9 +19,11 @@ function setRefreshCookie(res, token) {
 }
 
 const router = Router();
+const authByIp = limiters.authByIp(); // FR-17: slows down password guessing and sign-up spam
 
 router.post(
   '/register',
+  authByIp,
   validate({ body: registerSchema }),
   asyncHandler(async (req, res) => {
     const user = await authService.register(req.body);
@@ -30,6 +33,7 @@ router.post(
 
 router.post(
   '/login',
+  authByIp,
   validate({ body: loginSchema }),
   asyncHandler(async (req, res) => {
     const { user, accessToken, refreshToken } = await authService.login(req.body);

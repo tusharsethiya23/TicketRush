@@ -1,5 +1,6 @@
 const AppError = require('../../lib/AppError');
 const { runTransaction } = require('../../lib/transaction');
+const { cached, invalidate, keys, TTL } = require('../../lib/cache');
 const { Event, Seat } = require('../../models');
 const { CITY_COLLATION } = require('../../models/Event');
 const { checkTimes } = require('./events.schemas');
@@ -82,7 +83,10 @@ async function publishEvent(organiserId, eventId) {
     { $set: { status: 'on_sale' } },
     { new: true },
   );
-  if (event) return toPublicEvent(event);
+  if (event) {
+    await invalidate(keys.event(eventId));
+    return toPublicEvent(event);
+  }
 
   // Not updated: find out why, so the caller gets 404 or 409 EVENT_NOT_EDITABLE.
   await loadOwnDraft(organiserId, eventId);
@@ -108,28 +112,37 @@ async function listEvents({ city, from, to, page, limit }) {
   return { events: events.map(toPublicEvent), page, limit, total };
 }
 
-async function getPublishedEvent(eventId) {
-  const event = await Event.findOne({ _id: eventId, status: { $in: PUBLIC_STATUSES } }).lean();
-  if (!event) throw notFound();
-  return event;
+/** FR-5, NFR-3: a published event, cached for 60 s. Drafts are 404 and never cached. */
+async function getPublicEvent(eventId) {
+  return cached(keys.event(eventId), TTL.event, async () => {
+    const event = await Event.findOne({ _id: eventId, status: { $in: PUBLIC_STATUSES } }).lean();
+    if (!event) throw notFound();
+    return toPublicEvent(event);
+  });
 }
 
-/** FR-6: every seat with its status. holdId is internal and never exposed. */
+/**
+ * FR-6, NFR-3: every seat with its status, cached for 2 s. Writes do not clear it:
+ * at most 2 s stale is fine, because holds are decided in MongoDB, never from this
+ * copy. holdId is internal and never exposed.
+ */
 async function getSeatMap(eventId) {
-  await getPublishedEvent(eventId);
-  const seats = await Seat.find({ eventId })
-    .select('section row number pricePaise status')
-    .sort({ section: 1, row: 1, number: 1 })
-    .lean();
+  await getPublicEvent(eventId);
+  return cached(keys.seatMap(eventId), TTL.seatMap, async () => {
+    const seats = await Seat.find({ eventId })
+      .select('section row number pricePaise status')
+      .sort({ section: 1, row: 1, number: 1 })
+      .lean();
 
-  return seats.map((s) => ({
-    id: String(s._id),
-    section: s.section,
-    row: s.row,
-    number: s.number,
-    pricePaise: s.pricePaise,
-    status: s.status,
-  }));
+    return seats.map((s) => ({
+      id: String(s._id),
+      section: s.section,
+      row: s.row,
+      number: s.number,
+      pricePaise: s.pricePaise,
+      status: s.status,
+    }));
+  });
 }
 
 module.exports = {
@@ -137,7 +150,7 @@ module.exports = {
   updateEvent,
   publishEvent,
   listEvents,
-  getPublishedEvent,
+  getPublicEvent,
   getSeatMap,
   toPublicEvent,
   buildSeats,

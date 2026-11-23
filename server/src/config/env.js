@@ -24,6 +24,22 @@ const schema = z.object({
 
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   COOKIE_SECURE: bool.optional(),
+  // Number of proxy hops to trust for req.ip (0 = none). Set to 1 behind one reverse proxy.
+  TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+
+  REDIS_URL: z.string().default('redis://localhost:6379'),
+
+  // Rate limits (FR-17, SRS 8.3). Requests per window.
+  RATE_LIMIT_ENABLED: bool.default(true),
+  RATE_LIMIT_IP_ENABLED: bool.default(true), // false for k6 load tests, which send from one IP
+  RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  RL_ALL_USER: z.coerce.number().int().positive().default(120),
+  RL_ALL_IP: z.coerce.number().int().positive().default(300),
+  RL_AUTH_IP: z.coerce.number().int().positive().default(10),
+  RL_HOLD_USER: z.coerce.number().int().positive().default(10),
+  RL_HOLD_IP: z.coerce.number().int().positive().default(30),
+  RL_CONFIRM_USER: z.coerce.number().int().positive().default(10),
+  RL_CONFIRM_IP: z.coerce.number().int().positive().default(30),
 });
 
 const parsed = schema.safeParse(process.env);

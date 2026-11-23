@@ -3,6 +3,9 @@ const config = require('../../config/env');
 const AppError = require('../../lib/AppError');
 const { runTransaction, TransactionConflictError } = require('../../lib/transaction');
 const { Event, Seat, Hold } = require('../../models');
+const { getRedis } = require('../../lib/redis');
+const { keys, TTL } = require('../../lib/cache');
+const logger = require('../../lib/logger');
 
 const seatTaken = () => new AppError(409, 'SEAT_TAKEN', 'One or more seats are no longer available');
 
@@ -61,10 +64,27 @@ async function createHold({ userId, eventId, seatIds }) {
     });
     return toPublicHold(hold);
   } catch (err) {
-    if (err instanceof TransactionConflictError) throw seatTaken();
-    if (err.code === 'SEAT_TAKEN') await explainShortfall(eventId, seatIds);
+    if (err instanceof TransactionConflictError) {
+      recordFailedHold(eventId);
+      throw seatTaken();
+    }
+    if (err.code === 'SEAT_TAKEN') {
+      await explainShortfall(eventId, seatIds);
+      recordFailedHold(eventId);
+    }
     throw err;
   }
+}
+
+/** FR-18 input: lost races per event. Best effort and never awaited (SRS 7.2). */
+function recordFailedHold(eventId) {
+  const key = keys.failedHolds(eventId);
+  getRedis()
+    .multi()
+    .incr(key)
+    .expire(key, TTL.stats)
+    .exec()
+    .catch((err) => logger.warn({ err: err.message }, 'Could not record failed hold'));
 }
 
 /** Only on the failure path: a seat ID from another event is a bad request, not a lost race. */

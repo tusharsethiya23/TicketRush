@@ -2,6 +2,7 @@ const { Router } = require('express');
 const asyncHandler = require('../../lib/asyncHandler');
 const validate = require('../../middleware/validate');
 const { authenticate, requireRole } = require('../../middleware/auth');
+const { limiters } = require('../../middleware/rateLimit');
 const { idParams } = require('../../lib/schemas');
 const { createEventSchema, updateEventSchema, listEventsQuery } = require('./events.schemas');
 const { createHoldSchema } = require('../holds/holds.schemas');
@@ -10,6 +11,8 @@ const holdsService = require('../holds/holds.service');
 
 const router = Router();
 const organiser = [authenticate, requireRole('organiser')];
+const holdByIp = limiters.holdByIp();
+const holdByUser = limiters.holdByUser();
 
 /** FR-4 */
 router.post(
@@ -55,8 +58,7 @@ router.get(
   '/:id',
   validate({ params: idParams }),
   asyncHandler(async (req, res) => {
-    const event = await eventsService.getPublishedEvent(req.params.id);
-    res.json({ event: eventsService.toPublicEvent(event) });
+    res.json({ event: await eventsService.getPublicEvent(req.params.id) });
   }),
 );
 
@@ -72,8 +74,10 @@ router.get(
 /** FR-7, FR-8, FR-29 */
 router.post(
   '/:id/holds',
+  holdByIp,
   authenticate,
   requireRole('user'),
+  holdByUser,
   validate({ params: idParams, body: createHoldSchema }),
   asyncHandler(async (req, res) => {
     const hold = await holdsService.createHold({

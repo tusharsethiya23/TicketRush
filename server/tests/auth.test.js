@@ -292,8 +292,8 @@ describe('cross-cutting', () => {
     expect(replaced.headers['x-request-id']).not.toContain(' ');
   });
 
-  test('GET /health reports MongoDB as ok (FR-19)', async () => {
+  test('GET /health reports MongoDB and Redis as ok (FR-19)', async () => {
     const res = await request(app).get('/health').expect(200);
-    expect(res.body).toEqual({ status: 'ok', checks: { api: 'ok', mongo: 'ok' } });
+    expect(res.body).toEqual({ status: 'ok', checks: { api: 'ok', mongo: 'ok', redis: 'ok' } });
   });
 });
